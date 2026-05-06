@@ -85,16 +85,20 @@ a
 
 ---
 
+---
+
 ## فایل های دانلود شده در گیتهاب شما :
 
 1. [OBS-Studio-27.2.4-Full-x64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/OBS-Studio-27.2.4-Full-x64)
 
 2. [OBS-Studio-28.0.3-Full-Installer-x64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/OBS-Studio-28.0.3-Full-Installer-x64)
 
-3. [UNSAFE-TheBrokenScript-1.9.1+community](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/UNSAFE-TheBrokenScript-1.9.1+community)
+3. [OBS-Studio-32.1.2-Windows-x64-Installer](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/OBS-Studio-32.1.2-Windows-x64-Installer)
 
-4. [elasticsearch-9.3.4-windows-x86_64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/elasticsearch-9.3.4-windows-x86_64)
+4. [UNSAFE-TheBrokenScript-1.9.1+community](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/UNSAFE-TheBrokenScript-1.9.1+community)
 
-5. [unsafe-tbs-moonfix-chunkeventchange](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/unsafe-tbs-moonfix-chunkeventchange)
+5. [elasticsearch-9.3.4-windows-x86_64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/elasticsearch-9.3.4-windows-x86_64)
+
+6. [unsafe-tbs-moonfix-chunkeventchange](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/unsafe-tbs-moonfix-chunkeventchange)
 
 ---
