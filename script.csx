@@ -2,7 +2,6 @@
 #r "nuget: HtmlAgilityPack, 1.11.46"
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -79,7 +78,7 @@ async Task DownloadFileAsync(string url, string savePath)
     }
 }
 
-// ========== API حالت ==========
+// ========== API mode ==========
 async Task ApiMode()
 {
     int dlImages = 0, dlGifs = 0, dlVideos = 0;
@@ -111,7 +110,7 @@ async Task ApiMode()
             {
                 ".mp4" or ".webm" when dlVideos < wantedVideos => "Video",
                 ".gif" when dlGifs < wantedGifs => "Gif",
-                _ when dlImages < wantedImages && ext != ".mp4" && ext != ".webm" && ext != ".gif" => "Images",
+                _ when dlImages < wantedImages && ext != ".mp4" && ext != ".webm" && ext != ".gif" && !string.IsNullOrEmpty(ext) => "Images",
                 _ => null
             };
             if (subDir != null)
@@ -124,11 +123,12 @@ async Task ApiMode()
             await Task.Delay(150);
         }
         pid++;
-        Console.WriteLine($"📊 Progress: images {dlImages}/{wantedImages} | gifs {dlGifs}/{wantedGifs} | videos {dlVideos}/{wantedVideos}");
+        Console.WriteLine($"📊 images {dlImages}/{wantedImages} | gifs {dlGifs}/{wantedGifs} | videos {dlVideos}/{wantedVideos}");
     }
+    Console.WriteLine($"🎉 Done. images: {dlImages}/{wantedImages} | gifs: {dlGifs}/{wantedGifs} | videos: {dlVideos}/{wantedVideos}");
 }
 
-// ========== HTML حالت ==========
+// ========== HTML mode ==========
 async Task HtmlMode()
 {
     int dlImages = 0, dlGifs = 0, dlVideos = 0;
@@ -164,14 +164,30 @@ async Task HtmlMode()
             if (dlImages >= wantedImages && dlGifs >= wantedGifs && dlVideos >= wantedVideos) break;
             var postDoc = web.Load(postUrl);
 
-            // اول چک og:video
+            // ** اولویت با تشخیص ویدیو از تگ <video> **
+            var videoSource = postDoc.DocumentNode.SelectSingleNode("//video[@id='gelcomVideoPlayer']/source");
+            if (videoSource != null && dlVideos < wantedVideos)
+            {
+                var vidUrl = videoSource.GetAttributeValue("src", null);
+                if (!string.IsNullOrEmpty(vidUrl))
+                {
+                    // حذف query string
+                    if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
+                    string fname = Path.GetFileName(vidUrl);
+                    await DownloadFileAsync(vidUrl, Path.Combine(outputDir, "Video", fname));
+                    dlVideos++;
+                    await Task.Delay(150);
+                    continue; // برو پست بعدی
+                }
+            }
+
+            // og:video به عنوان روش پشتیبان
             var ogVideo = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:video']");
             if (ogVideo != null && dlVideos < wantedVideos)
             {
                 var vidUrl = ogVideo.GetAttributeValue("content", null);
                 if (!string.IsNullOrEmpty(vidUrl))
                 {
-                    // حذف query string
                     if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
                     string fname = Path.GetFileName(vidUrl);
                     await DownloadFileAsync(vidUrl, Path.Combine(outputDir, "Video", fname));
@@ -181,13 +197,13 @@ async Task HtmlMode()
                 }
             }
 
+            // og:image برای تصویر یا گیف
             var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
             if (ogImage != null)
             {
                 var imgUrl = ogImage.GetAttributeValue("content", null);
                 if (!string.IsNullOrEmpty(imgUrl))
                 {
-                    // حذف query string
                     if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.LastIndexOf('?'));
                     string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
                     string fname = Path.GetFileName(imgUrl);
@@ -197,7 +213,7 @@ async Task HtmlMode()
                         await DownloadFileAsync(imgUrl, Path.Combine(outputDir, "Gif", fname));
                         dlGifs++;
                     }
-                    else if (ext != ".gif" && dlImages < wantedImages)
+                    else if (ext != ".gif" && !string.IsNullOrEmpty(ext) && dlImages < wantedImages)
                     {
                         await DownloadFileAsync(imgUrl, Path.Combine(outputDir, "Images", fname));
                         dlImages++;
@@ -207,13 +223,12 @@ async Task HtmlMode()
             }
         }
         pid += 42;
-        Console.WriteLine($"📊 Progress: images {dlImages}/{wantedImages} | gifs {dlGifs}/{wantedGifs} | videos {dlVideos}/{wantedVideos}");
+        Console.WriteLine($"📊 images {dlImages}/{wantedImages} | gifs {dlGifs}/{wantedGifs} | videos {dlVideos}/{wantedVideos}");
     }
+    Console.WriteLine($"🎉 Done. images: {dlImages}/{wantedImages} | gifs: {dlGifs}/{wantedGifs} | videos: {dlVideos}/{wantedVideos}");
 }
 
 if (useApi)
     await ApiMode();
 else
     await HtmlMode();
-
-Console.WriteLine($"\n🎉 Done. images: {0}/{wantedImages} | gifs: {0}/{wantedGifs} | videos: {0}/{wantedVideos}");
