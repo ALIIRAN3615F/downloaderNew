@@ -1,0 +1,494 @@
+name: 🎥 Record displaypointstarring video
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL to open"
+        required: true
+        default: "https://rule34.world/"
+        type: string
+      duration:
+        description: "Recording duration in seconds"
+        required: true
+        default: "60"
+        type: string
+      click_selector:
+        description: "Optional CSS selector for the video/card/play button"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            xvfb \
+            fluxbox \
+            pulseaudio \
+            x11-utils \
+            curl \
+            wget \
+            ca-certificates \
+            fonts-liberation \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libgtk-3-0 \
+            libgbm1 \
+            libxss1 \
+            libasound2t64 || sudo apt-get install -y libasound2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Puppeteer
+        run: |
+          npm init -y
+          npm install puppeteer
+
+      - name: Create browser automation script
+        run: |
+          cat > record.js <<'EOF'
+          const puppeteer = require('puppeteer');
+
+          const rawUrl = process.argv[2];
+          const durationSeconds = Number(process.argv[3] || 60);
+          const clickSelector = process.argv[4] || '';
+
+          const ALLOWED_HOST = 'displaypointstarring.com';
+          const durationMs = durationSeconds * 1000;
+
+          function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+          }
+
+          function normalizeUrl(raw) {
+            if (!/^https?:\/\//i.test(raw)) return 'https://' + raw;
+            return raw;
+          }
+
+          function getHostname(raw) {
+            try {
+              return new URL(raw).hostname.replace(/^www\./, '');
+            } catch {
+              return '';
+            }
+          }
+
+          function isAllowedUrl(raw) {
+            const host = getHostname(raw);
+            return host === ALLOWED_HOST || host.endsWith('.' + ALLOWED_HOST);
+          }
+
+          const originalUrl = normalizeUrl(rawUrl);
+
+          async function ensureSameDomain(page) {
+            const currentUrl = page.url();
+            if (!isAllowedUrl(currentUrl)) {
+              console.log('[domain] redirected away:', currentUrl);
+              console.log('[domain] returning to:', originalUrl);
+              await page.goto(originalUrl, {
+                waitUntil: 'networkidle2',
+                timeout: 60000
+              });
+              await sleep(3000);
+            }
+          }
+
+          async function clickCookieButtons(page) {
+            const texts = [
+              'accept', 'agree', 'ok', 'continue', 'got it', 'allow',
+              'قبول', 'تایید', 'ادامه', 'باشه'
+            ];
+
+            try {
+              const buttons = await page.$$('button, input[type="button"], input[type="submit"], [role="button"], a');
+              for (const btn of buttons.slice(0, 40)) {
+                const text = await page.evaluate(el => {
+                  return (el.innerText || el.value || el.getAttribute('aria-label') || '').toLowerCase().trim();
+                }, btn).catch(() => '');
+
+                if (texts.some(t => text.includes(t))) {
+                  console.log('[cookie] clicking:', text);
+                  await btn.click({ delay: 80 }).catch(() => {});
+                  await sleep(1500);
+                }
+              }
+            } catch (e) {
+              console.log('[cookie] error:', e.message);
+            }
+          }
+
+          async function forcePlayInPage(page) {
+            try {
+              await page.evaluate(() => {
+                const vids = Array.from(document.querySelectorAll('video'));
+                for (const v of vids) {
+                  try {
+                    v.muted = false;
+                    v.volume = 1;
+                    v.controls = true;
+                    const p = v.play();
+                    if (p && typeof p.catch === 'function') p.catch(() => {});
+                  } catch {}
+                }
+              });
+            } catch (e) {}
+          }
+
+          async function smartClickHandle(page, handle) {
+            const box = await handle.boundingBox();
+            if (!box || box.width < 20 || box.height < 20) return false;
+
+            await handle.evaluate(node => {
+              node.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+            }).catch(() => {});
+
+            await sleep(800);
+
+            const box2 = await handle.boundingBox();
+            if (!box2) return false;
+
+            const x = box2.x + box2.width / 2;
+            const y = box2.y + box2.height / 2;
+
+            await page.mouse.move(x, y, { steps: 8 }).catch(() => {});
+            await sleep(200);
+            await page.mouse.down().catch(() => {});
+            await sleep(80);
+            await page.mouse.up().catch(() => {});
+            await sleep(1500);
+
+            await handle.evaluate(node => {
+              node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+              node.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+              node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+              node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+              node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            }).catch(() => {});
+
+            await sleep(2000);
+            return true;
+          }
+
+          async function clickCandidatesInFrame(frame, page, customSelector = '') {
+            const selectors = [];
+
+            if (customSelector && customSelector.trim()) {
+              selectors.push(customSelector.trim());
+            }
+
+            selectors.push(
+              'video',
+              'button[aria-label*="play" i]',
+              'button[title*="play" i]',
+              '[class*="play" i]',
+              '[id*="play" i]',
+              '.video-card',
+              '.video',
+              '.thumb',
+              '.thumbnail',
+              '.poster',
+              '.card',
+              '[class*="thumb" i]',
+              '[class*="poster" i]',
+              '[class*="video" i]',
+              '[data-testid*="video" i]',
+              '[data-test*="video" i]'
+            );
+
+            for (const selector of selectors) {
+              let elements = [];
+              try {
+                elements = await frame.$$(selector);
+              } catch {
+                continue;
+              }
+
+              if (!elements.length) continue;
+              console.log('[click] selector:', selector, 'count:', elements.length);
+
+              for (const el of elements.slice(0, 12)) {
+                const visible = await frame.evaluate(node => {
+                  const rect = node.getBoundingClientRect();
+                  const style = window.getComputedStyle(node);
+                  return (
+                    rect.width > 20 &&
+                    rect.height > 20 &&
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    style.opacity !== '0'
+                  );
+                }, el).catch(() => false);
+
+                if (!visible) continue;
+
+                const href = await frame.evaluate(node => {
+                  const a = node.closest('a') || (node.tagName === 'A' ? node : null);
+                  return a ? a.href : '';
+                }, el).catch(() => '');
+
+                if (href && !isAllowedUrl(href)) {
+                  console.log('[click] skipped external href:', href);
+                  continue;
+                }
+
+                const clicked = await smartClickHandle(page, el).catch(() => false);
+                if (!clicked) continue;
+
+                await sleep(2500);
+                return true;
+              }
+            }
+
+            return false;
+          }
+
+          async function clickVideoOrItem(page, customSelector = '') {
+            const mainFrame = page.mainFrame();
+
+            // اول داخل صفحه اصلی
+            if (await clickCandidatesInFrame(mainFrame, page, customSelector)) {
+              return true;
+            }
+
+            // بعد داخل iframe ها
+            const frames = page.frames().filter(f => f !== mainFrame);
+            for (const frame of frames) {
+              try {
+                console.log('[iframe] trying frame:', frame.url());
+                if (await clickCandidatesInFrame(frame, page, customSelector)) {
+                  return true;
+                }
+              } catch (e) {
+                console.log('[iframe] error:', e.message);
+              }
+            }
+
+            return false;
+          }
+
+          async function closePopups(page) {
+            try {
+              const selectors = [
+                '[aria-label="Close"]',
+                '[aria-label="close"]',
+                '.close',
+                '.modal-close',
+                '.popup-close',
+                '[class*="close" i]'
+              ];
+
+              for (const sel of selectors) {
+                const els = await page.$$(sel).catch(() => []);
+                for (const el of els.slice(0, 5)) {
+                  await el.click({ delay: 50 }).catch(() => {});
+                  await sleep(800);
+                }
+              }
+            } catch {}
+          }
+
+          (async () => {
+            const browser = await puppeteer.launch({
+              headless: false,
+              defaultViewport: null,
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--autoplay-policy=no-user-gesture-required',
+                '--window-size=1280,720',
+                '--start-maximized',
+                '--use-fake-ui-for-media-stream',
+                '--ignore-certificate-errors'
+              ]
+            });
+
+            const page = await browser.newPage();
+
+            await page.setViewport({ width: 1280, height: 720 });
+
+            page.on('popup', async popup => {
+              try {
+                console.log('[popup] detected:', popup.url());
+                await popup.close();
+              } catch {}
+            });
+
+            page.on('framenavigated', async frame => {
+              if (frame === page.mainFrame()) {
+                const url = page.url();
+                console.log('[nav]', url);
+              }
+            });
+
+            try {
+              console.log('[open]', originalUrl);
+
+              await page.goto(originalUrl, {
+                waitUntil: 'networkidle2',
+                timeout: 60000
+              });
+
+              await sleep(4000);
+
+              await ensureSameDomain(page);
+              await clickCookieButtons(page);
+              await closePopups(page);
+              await forcePlayInPage(page);
+
+              console.log('[action] trying to click video/item');
+              const clicked = await clickVideoOrItem(page, clickSelector);
+              console.log('[action] clicked:', clicked);
+
+              await sleep(3000);
+              await ensureSameDomain(page);
+              await clickCookieButtons(page);
+              await closePopups(page);
+              await forcePlayInPage(page);
+
+              const start = Date.now();
+
+              while (Date.now() - start < durationMs) {
+                await ensureSameDomain(page);
+                await forcePlayInPage(page);
+                await sleep(5000);
+              }
+
+            } catch (err) {
+              console.error('[error]', err.message);
+            } finally {
+              await browser.close();
+            }
+          })();
+          EOF
+
+      - name: Prepare output folder
+        run: |
+          RAW_URL="${{ github.event.inputs.url }}"
+
+          if [[ ! "$RAW_URL" =~ ^https?:// ]]; then
+            URL="https://$RAW_URL"
+          else
+            URL="$RAW_URL"
+          fi
+
+          DOMAIN=$(echo "$URL" | awk -F/ '{print $3}' | sed 's/^www\.//')
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          FOLDER="artifacts/$DOMAIN/$TIMESTAMP"
+
+          mkdir -p "$FOLDER"
+
+          echo "URL=$URL" >> $GITHUB_ENV
+          echo "DOMAIN=$DOMAIN" >> $GITHUB_ENV
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          echo "FOLDER=$FOLDER" >> $GITHUB_ENV
+          echo "VIDEO_PATH=$FOLDER/recording.mp4" >> $GITHUB_ENV
+
+      - name: Start virtual display and audio
+        run: |
+          export DISPLAY=:99
+          export PULSE_SERVER=unix:/tmp/pulse-socket
+
+          pulseaudio \
+            --daemonize=yes \
+            --exit-idle-time=-1 \
+            --log-target=file:/tmp/pulseaudio.log \
+            --load="module-native-protocol-unix socket=/tmp/pulse-socket auth-anonymous=1" \
+            --load="module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink" \
+            --load="module-remap-source master=VirtualSink.monitor source_name=VirtualSource source_properties=device.description=VirtualSource"
+
+          sleep 3
+
+          Xvfb :99 -screen 0 1280x720x24 > /tmp/xvfb.log 2>&1 &
+          sleep 2
+
+          fluxbox > /tmp/fluxbox.log 2>&1 &
+          sleep 2
+
+          pactl info || true
+          pactl list short sinks || true
+          pactl list short sources || true
+
+      - name: Start ffmpeg recording
+        run: |
+          export DISPLAY=:99
+          export PULSE_SERVER=unix:/tmp/pulse-socket
+
+          ffmpeg \
+            -y \
+            -video_size 1280x720 \
+            -framerate 30 \
+            -f x11grab \
+            -i :99.0 \
+            -f pulse \
+            -i VirtualSink.monitor \
+            -c:v libx264 \
+            -preset veryfast \
+            -pix_fmt yuv420p \
+            -c:a aac \
+            -b:a 128k \
+            "${VIDEO_PATH}" > /tmp/ffmpeg.log 2>&1 &
+
+          echo $! > /tmp/ffmpeg.pid
+          sleep 2
+
+      - name: Run browser automation
+        run: |
+          export DISPLAY=:99
+          export PULSE_SERVER=unix:/tmp/pulse-socket
+
+          node record.js \
+            "${{ env.URL }}" \
+            "${{ github.event.inputs.duration }}" \
+            "${{ github.event.inputs.click_selector }}" || true
+
+      - name: Stop ffmpeg and show logs
+        if: always()
+        run: |
+          if [ -f /tmp/ffmpeg.pid ]; then
+            kill -INT "$(cat /tmp/ffmpeg.pid)" || true
+            sleep 5
+          fi
+
+          echo "=== ffmpeg log ==="
+          tail -200 /tmp/ffmpeg.log || true
+
+          echo "=== pulseaudio log ==="
+          tail -200 /tmp/pulseaudio.log || true
+
+          echo "=== xvfb log ==="
+          tail -100 /tmp/xvfb.log || true
+
+          echo "=== output ==="
+          ls -lah "${FOLDER}" || true
+
+      - name: Save metadata
+        run: |
+          cat > "${FOLDER}/info.txt" <<TXT
+          URL: ${URL}
+          Domain: ${DOMAIN}
+          Recorded At: ${TIMESTAMP}
+          Duration: ${{ github.event.inputs.duration }} seconds
+          Click Selector: ${{ github.event.inputs.click_selector }}
+          Allowed Domain Lock: displaypointstarring.com
+          TXT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recording-${{ env.DOMAIN }}-${{ env.TIMESTAMP }}
+          path: ${{ env.FOLDER }}
