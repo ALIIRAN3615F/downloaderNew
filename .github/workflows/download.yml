@@ -1,0 +1,45 @@
+name: Download R34 Content
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: 'Tags to search (space-separated)'
+        required: true
+        default: 'anime'
+      quantity:
+        description: 'Number of files to download'
+        required: true
+        default: '10'
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      
+      - name: Restore dependencies
+        run: dotnet restore R34Downloader/R34Downloader.csproj
+      
+      - name: Build project
+        run: dotnet build R34Downloader/R34Downloader.csproj --configuration Release --no-restore
+      
+      - name: Run downloader
+        run: |
+          dotnet run --project R34Downloader/R34Downloader.csproj --configuration Release -- "${{ github.event.inputs.tags }}" ${{ github.event.inputs.quantity }}
+      
+      - name: Commit and push files
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add Downloads/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Add downloaded files: ${{ github.event.inputs.tags }} (${{ github.event.inputs.quantity }} files)" && git push)
