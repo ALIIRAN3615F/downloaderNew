@@ -1,87 +1,98 @@
-name: Rule34 Batch Download
+name: Download Content
 
 on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Tags (e.g., anime)'
+        description: 'Comma separated tags'
         required: true
+        default: 'catGirl'
       images:
         description: 'Number of images'
-        default: '10'
+        required: true
+        default: '5'
       gifs:
-        description: 'Number of gifs'
-        default: '10'
+        description: 'Number of GIFs'
+        required: true
+        default: '3'
       videos:
         description: 'Number of videos'
-        default: '10'
+        required: true
+        default: '2'
       use_api:
-        description: 'Use API (true/false)'
+        description: 'Use API mode?'
+        required: true
         default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      compress_files:
+        description: 'Compress large files?'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       max_total:
-        description: 'Max posts to scan (API mode only)'
-        default: '2000'
+        description: 'Maximum total posts to check'
+        required: true
+        default: '1000'
+
+env:
+  IMAGES: ${{ github.event.inputs.images }}
+  GIFS: ${{ github.event.inputs.gifs }}
+  VIDEOS: ${{ github.event.inputs.videos }}
+  USE_API: ${{ github.event.inputs.use_api }}
+  COMPRESS_FILES: ${{ github.event.inputs.compress_files }}
+  MAX_TOTAL: ${{ github.event.inputs.max_total }}
 
 jobs:
   download:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    
     steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # گرفتن تاریخچه کامل برای جلوگیری از conflict
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Install dotnet-script
-        run: dotnet tool install -g dotnet-script
-
-      - name: Run downloader
-        env:
-          TAGS: ${{ inputs.tags }}
-          IMAGES: ${{ inputs.images }}
-          GIFS: ${{ inputs.gifs }}
-          VIDEOS: ${{ inputs.videos }}
-          USE_API: ${{ inputs.use_api }}
-          MAX_TOTAL: ${{ inputs.max_total }}
-        run: |
-          if [ "$USE_API" = "false" ]; then
-            dotnet script script.csx \
-              --tags "$TAGS" \
-              --images $IMAGES \
-              --gifs $GIFS \
-              --videos $VIDEOS \
-              --no-api
-          else
-            dotnet script script.csx \
-              --tags "$TAGS" \
-              --images $IMAGES \
-              --gifs $GIFS \
-              --videos $VIDEOS \
-              --max-total $MAX_TOTAL
-          fi
-
-      - name: Commit and push changes
-        if: success()
-        env:
-          TAGS: ${{ inputs.tags }}
-          IMAGES: ${{ inputs.images }}
-          GIFS: ${{ inputs.gifs }}
-          VIDEOS: ${{ inputs.videos }}
-          USE_API: ${{ inputs.use_api }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add downloads/
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Downloaded: images=${IMAGES}, gifs=${GIFS}, videos=${VIDEOS} for tags='${TAGS}' (mode=${USE_API})"
-            git pull --rebase origin main
-            git push
-          fi
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    
+    - name: Install dotnet-script
+      run: dotnet tool install -g dotnet-script
+    
+    - name: Run Download Script
+      run: |
+        if [ "$USE_API" = "false" ]; then
+          dotnet script script.csx --tags "${{ github.event.inputs.tags }}" \
+            --images $IMAGES \
+            --gifs $GIFS \
+            --videos $VIDEOS \
+            --max-total $MAX_TOTAL \
+            --no-api
+        else
+          dotnet script script.csx --tags "${{ github.event.inputs.tags }}" \
+            --images $IMAGES \
+            --gifs $GIFS \
+            --videos $VIDEOS \
+            --max-total $MAX_TOTAL
+        fi
+    
+    - name: Setup Git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+    
+    - name: Add and Commit changes
+      run: |
+        git add downloads/
+        git pull --rebase origin main
+        git commit -m "Update: Downloaded content for tag '${{ github.event.inputs.tags }}' - Images:$IMAGES GIFs:$GIFS Videos:$VIDEOS" || echo "No changes to commit"
+    
+    - name: Push changes
+      run: git push origin main
