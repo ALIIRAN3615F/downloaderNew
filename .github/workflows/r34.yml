@@ -1,0 +1,46 @@
+name: downloader
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "rule34 tags"
+        required: true
+        default: "catgirl"
+      limit:
+        description: "download count"
+        required: true
+        default: "10"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: checkout
+      uses: actions/checkout@v4
+
+    - name: setup dotnet
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0
+
+    - name: run downloader
+      run: |
+        cd downloader
+        dotnet run
+      env:
+        TAGS: ${{ github.event.inputs.tags }}
+        LIMIT: ${{ github.event.inputs.limit }}
+
+    - name: commit files
+      run: |
+        git config --global user.name "bot"
+        git config --global user.email "bot@github.com"
+
+        git add Downloads
+
+        git commit -m "auto download" || echo "no changes"
+
+        git push
