@@ -17,7 +17,7 @@ on:
         default: '10'
       use_api:
         description: 'Use API (true/false)'
-        default: 'true'
+        default: 'false'  # پیش‌فرض HTML باشد
       max_total:
         description: 'Max posts to scan (API mode only)'
         default: '2000'
@@ -25,9 +25,13 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # این خط را اضافه کنید
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}  # این خط را اضافه کنید
+          
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
