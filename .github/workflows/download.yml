@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Tags (e.g., angel+blonde)'
+        description: 'Tags (e.g., anime)'
         required: true
       images:
         description: 'Number of images'
@@ -17,7 +17,7 @@ on:
         default: '10'
       use_api:
         description: 'Use API (true/false)'
-        default: 'false'  # پیش‌فرض HTML باشد
+        default: 'false'
       max_total:
         description: 'Max posts to scan (API mode only)'
         default: '2000'
@@ -26,12 +26,13 @@ jobs:
   download:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # این خط را اضافه کنید
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}  # این خط را اضافه کنید
-          
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # گرفتن تاریخچه کامل برای جلوگیری از conflict
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -65,8 +66,14 @@ jobs:
               --max-total $MAX_TOTAL
           fi
 
-      - name: Commit downloaded content
+      - name: Commit and push changes
         if: success()
+        env:
+          TAGS: ${{ inputs.tags }}
+          IMAGES: ${{ inputs.images }}
+          GIFS: ${{ inputs.gifs }}
+          VIDEOS: ${{ inputs.videos }}
+          USE_API: ${{ inputs.use_api }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -75,5 +82,6 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Downloaded: images=${IMAGES}, gifs=${GIFS}, videos=${VIDEOS} for tags='${TAGS}' (mode=${USE_API})"
+            git pull --rebase origin main
             git push
           fi
