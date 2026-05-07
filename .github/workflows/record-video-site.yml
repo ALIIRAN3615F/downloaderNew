@@ -1,0 +1,420 @@
+name: 🎥 Record Website Video With Audio
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to visit'
+        required: true
+        type: string
+      duration:
+        description: 'Recording duration in seconds'
+        required: false
+        default: '60'
+        type: string
+      click_selector:
+        description: 'Optional CSS selector to click video/item'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            curl \
+            zip \
+            ffmpeg \
+            xvfb \
+            fluxbox \
+            pulseaudio \
+            pavucontrol \
+            x11-utils \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libgtk-3-0 \
+            libgbm-dev \
+            libasound2t64 || sudo apt-get install -y libasound2
+
+      - name: Setup Node and Puppeteer
+        run: |
+          npm init -y
+          npm install puppeteer
+
+      - name: Create browser script
+        run: |
+          cat > record.js << 'ENDOFSCRIPT'
+          const puppeteer = require('puppeteer');
+
+          const inputUrl = process.argv[2];
+          const durationSeconds = Number(process.argv[3] || 60);
+          const clickSelector = process.argv[4] || '';
+
+          const durationMs = durationSeconds * 1000;
+
+          function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+          }
+
+          function normalizeUrl(raw) {
+            if (!/^https?:\/\//i.test(raw)) {
+              return 'https://' + raw;
+            }
+            return raw;
+          }
+
+          function getHostname(raw) {
+            try {
+              return new URL(raw).hostname.replace(/^www\./, '');
+            } catch {
+              return '';
+            }
+          }
+
+          const originalUrl = normalizeUrl(inputUrl);
+          const originalDomain = getHostname(originalUrl);
+
+          async function ensureSameDomain(page) {
+            const currentUrl = page.url();
+            const currentDomain = getHostname(currentUrl);
+
+            console.log('Current URL:', currentUrl);
+            console.log('Current domain:', currentDomain);
+            console.log('Original domain:', originalDomain);
+
+            if (!currentDomain || currentDomain !== originalDomain) {
+              console.log('Domain changed. Returning to original URL...');
+              await page.goto(originalUrl, {
+                waitUntil: 'networkidle2',
+                timeout: 60000
+              });
+              await sleep(3000);
+            }
+          }
+
+          async function clickCookieButtons(page) {
+            const texts = [
+              'accept',
+              'agree',
+              'ok',
+              'continue',
+              'got it',
+              'allow',
+              'قبول',
+              'تایید',
+              'ادامه',
+              'باشه'
+            ];
+
+            try {
+              const buttons = await page.$$('button, input[type="button"], input[type="submit"], a');
+              for (const btn of buttons.slice(0, 30)) {
+                const text = await page.evaluate(el => {
+                  return (el.innerText || el.value || el.ariaLabel || '').toLowerCase().trim();
+                }, btn).catch(() => '');
+
+                if (texts.some(t => text.includes(t))) {
+                  console.log('Click possible cookie/continue button:', text);
+                  await btn.click().catch(() => {});
+                  await sleep(1000);
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+
+          async function clickVideoOrItem(page) {
+            if (clickSelector && clickSelector.trim()) {
+              try {
+                console.log('Trying custom selector:', clickSelector);
+                await page.waitForSelector(clickSelector, { timeout: 10000 });
+                await page.click(clickSelector, { delay: 100 });
+                await sleep(3000);
+                return true;
+              } catch (e) {
+                console.log('Custom selector failed:', e.message);
+              }
+            }
+
+            const selectors = [
+              'video',
+              'button[aria-label*="Play"]',
+              'button[aria-label*="play"]',
+              'button[title*="Play"]',
+              'button[title*="play"]',
+              '.play',
+              '.play-button',
+              '[class*="play"]',
+              '[id*="play"]',
+              'a[href*="video"]',
+              'a[href*="watch"]',
+              '.video',
+              '[class*="video"]',
+              'article a',
+              '.card a',
+              '.item a',
+              'a'
+            ];
+
+            for (const selector of selectors) {
+              try {
+                const elements = await page.$$(selector);
+                if (!elements || elements.length === 0) continue;
+
+                console.log('Found selector:', selector, 'count:', elements.length);
+
+                // روی اولین گزینه‌های قابل مشاهده کلیک کن
+                for (const el of elements.slice(0, 10)) {
+                  const visible = await page.evaluate(node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 20 &&
+                           rect.height > 20 &&
+                           style.display !== 'none' &&
+                           style.visibility !== 'hidden' &&
+                           rect.top >= 0 &&
+                           rect.left >= 0;
+                  }, el).catch(() => false);
+
+                  if (!visible) continue;
+
+                  await el.click({ delay: 100 }).catch(() => {});
+                  await sleep(4000);
+
+                  await ensureSameDomain(page);
+
+                  return true;
+                }
+              } catch (e) {}
+            }
+
+            return false;
+          }
+
+          async function forcePlayVideos(page) {
+            try {
+              await page.evaluate(() => {
+                const videos = Array.from(document.querySelectorAll('video'));
+
+                for (const video of videos) {
+                  video.muted = false;
+                  video.volume = 1.0;
+                  video.controls = true;
+                  video.play().catch(() => {});
+                }
+              });
+            } catch (e) {}
+          }
+
+          (async () => {
+            const browser = await puppeteer.launch({
+              headless: false,
+              defaultViewport: null,
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--autoplay-policy=no-user-gesture-required',
+                '--window-size=1280,720',
+                '--start-maximized',
+                '--use-fake-ui-for-media-stream'
+              ]
+            });
+
+            const page = await browser.newPage();
+
+            await page.setViewport({
+              width: 1280,
+              height: 720
+            });
+
+            page.on('framenavigated', async frame => {
+              if (frame === page.mainFrame()) {
+                console.log('Navigated:', page.url());
+              }
+            });
+
+            try {
+              console.log('Opening:', originalUrl);
+
+              await page.goto(originalUrl, {
+                waitUntil: 'networkidle2',
+                timeout: 60000
+              });
+
+              await sleep(3000);
+
+              await ensureSameDomain(page);
+              await clickCookieButtons(page);
+
+              console.log('Clicking video/item...');
+              await clickVideoOrItem(page);
+
+              await sleep(3000);
+
+              await ensureSameDomain(page);
+              await clickCookieButtons(page);
+              await forcePlayVideos(page);
+
+              console.log('Recording/watch time:', durationSeconds, 'seconds');
+
+              const start = Date.now();
+
+              while (Date.now() - start < durationMs) {
+                await ensureSameDomain(page);
+                await forcePlayVideos(page);
+                await sleep(5000);
+              }
+
+            } catch (err) {
+              console.error('Browser error:', err.message);
+            } finally {
+              await browser.close();
+            }
+          })();
+          ENDOFSCRIPT
+
+      - name: Prepare output
+        run: |
+          RAW_URL="${{ github.event.inputs.url }}"
+
+          if [[ ! "$RAW_URL" =~ ^https?:// ]]; then
+            URL="https://$RAW_URL"
+          else
+            URL="$RAW_URL"
+          fi
+
+          DOMAIN=$(echo "$URL" | awk -F/ '{print $3}' | sed 's/^www\.//')
+          SLUG=$(echo "$URL" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-100)
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+          FOLDER="recordings/$DOMAIN/$SLUG/$TIMESTAMP"
+          mkdir -p "$FOLDER"
+
+          echo "URL=$URL" >> $GITHUB_ENV
+          echo "DOMAIN=$DOMAIN" >> $GITHUB_ENV
+          echo "SLUG=$SLUG" >> $GITHUB_ENV
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          echo "FOLDER=$FOLDER" >> $GITHUB_ENV
+          echo "VIDEO_PATH=$FOLDER/recording.mp4" >> $GITHUB_ENV
+
+      - name: Record screen with audio
+        run: |
+          export DISPLAY=:99
+          export PULSE_SERVER=unix:/tmp/pulse-socket
+
+          echo "Starting PulseAudio..."
+
+          mkdir -p /tmp/pulse
+
+          pulseaudio \
+            --daemonize=yes \
+            --exit-idle-time=-1 \
+            --log-target=file:/tmp/pulseaudio.log \
+            --load="module-native-protocol-unix socket=/tmp/pulse-socket auth-anonymous=1" \
+            --load="module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink" \
+            --load="module-remap-source master=VirtualSink.monitor source_name=VirtualSource source_properties=device.description=VirtualSource"
+
+          sleep 3
+
+          pactl info || true
+          pactl list short sinks || true
+          pactl list short sources || true
+
+          echo "Starting Xvfb..."
+
+          Xvfb :99 -screen 0 1280x720x24 > /tmp/xvfb.log 2>&1 &
+          sleep 3
+
+          fluxbox > /tmp/fluxbox.log 2>&1 &
+          sleep 2
+
+          echo "Starting FFmpeg with audio and video..."
+
+          ffmpeg \
+            -y \
+            -video_size 1280x720 \
+            -framerate 30 \
+            -f x11grab \
+            -i :99.0 \
+            -f pulse \
+            -i VirtualSink.monitor \
+            -c:v libx264 \
+            -preset veryfast \
+            -pix_fmt yuv420p \
+            -c:a aac \
+            -b:a 128k \
+            -shortest \
+            "$VIDEO_PATH" > /tmp/ffmpeg.log 2>&1 &
+
+          FFMPEG_PID=$!
+
+          echo "Opening browser and watching video..."
+
+          node record.js "$URL" "${{ github.event.inputs.duration }}" "${{ github.event.inputs.click_selector }}" || true
+
+          echo "Stopping FFmpeg..."
+
+          kill -INT $FFMPEG_PID || true
+          sleep 5
+
+          echo "FFmpeg log:"
+          tail -100 /tmp/ffmpeg.log || true
+
+          echo "PulseAudio log:"
+          tail -100 /tmp/pulseaudio.log || true
+
+          echo "Output file:"
+          ls -lh "$VIDEO_PATH" || true
+
+      - name: Create info file
+        run: |
+          {
+            echo "# Website Recording"
+            echo ""
+            echo "**URL:** $URL"
+            echo ""
+            echo "**Domain:** $DOMAIN"
+            echo ""
+            echo "**Time:** $TIMESTAMP"
+            echo ""
+            echo "**Duration:** ${{ github.event.inputs.duration }} seconds"
+            echo ""
+            echo "**Click selector:** ${{ github.event.inputs.click_selector }}"
+            echo ""
+            echo "[Download recording](./recording.mp4)"
+          } > "$FOLDER/index.md"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-recording-${{ env.TIMESTAMP }}
+          path: ${{ env.FOLDER }}
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add recordings/
+
+          if git diff --staged --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+
+          git commit -m "Saved website recording with audio [skip ci]"
+          git pull --rebase
+          git push
