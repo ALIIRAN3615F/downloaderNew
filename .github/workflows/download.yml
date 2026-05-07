@@ -1,45 +1,58 @@
-name: Download R34 Content
+name: 🤖 Download & Commit
 
 on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Tags to search (space-separated)'
+        description: '🏷️ Tags (e.g., catgirl+solo)'
         required: true
-        default: 'anime'
       quantity:
-        description: 'Number of files to download'
-        required: true
+        description: '🔢 تعداد (Number of items)'
+        required: false
         default: '10'
+      use_api:
+        description: '⚙️ Use API instead of HTML?'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: write
 
 jobs:
-  download:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
+  download-and-commit:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
     steps:
-      - name: Checkout repository
+      - name: ⬇️ Checkout repo
         uses: actions/checkout@v4
-      
-      - name: Setup .NET
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🛠️ Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
-      
-      - name: Restore dependencies
-        run: dotnet restore R34Downloader/R34Downloader.csproj
-      
-      - name: Build project
-        run: dotnet build R34Downloader/R34Downloader.csproj --configuration Release --no-restore
-      
-      - name: Run downloader
+          dotnet-version: '6.0.x'
+
+      - name: 📦 Install dotnet-script
+        run: dotnet tool install -g dotnet-script
+
+      - name: 🚀 Run download script
         run: |
-          dotnet run --project R34Downloader/R34Downloader.csproj --configuration Release -- "${{ github.event.inputs.tags }}" ${{ github.event.inputs.quantity }}
-      
-      - name: Commit and push files
+          dotnet script download-script.csx -- `
+            --tags "${{ inputs.tags }}" `
+            --quantity ${{ inputs.quantity }} `
+            --path downloads `
+            ${{ inputs.use_api == 'true' && '--api' || '' }}
+
+      - name: 📤 Commit & Push
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add Downloads/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Add downloaded files: ${{ github.event.inputs.tags }} (${{ github.event.inputs.quantity }} files)" && git push)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add downloads/
+          git commit -m "📥 Auto-download: tags=${{ inputs.tags }} qty=${{ inputs.quantity }}" || echo "No changes"
+          git push
