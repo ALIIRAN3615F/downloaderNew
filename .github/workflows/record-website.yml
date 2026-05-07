@@ -1,0 +1,230 @@
+name: 🎥 Record Website Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to visit and record'
+        required: true
+        type: string
+      duration:
+        description: 'Recording duration in seconds'
+        required: false
+        default: '60'
+        type: string
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            curl \
+            zip \
+            ffmpeg \
+            xvfb \
+            fluxbox \
+            x11-utils \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libgtk-3-0 \
+            libgbm-dev \
+            libasound2t64 || sudo apt-get install -y libasound2
+
+      - name: Setup Node and Puppeteer
+        run: |
+          npm init -y
+          npm install puppeteer
+
+      - name: Create recording script
+        run: |
+          cat > record.js << 'ENDOFSCRIPT'
+          const puppeteer = require('puppeteer');
+
+          const url = process.argv[2];
+          const duration = Number(process.argv[3] || 60) * 1000;
+
+          function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+          }
+
+          (async () => {
+            const browser = await puppeteer.launch({
+              headless: false,
+              defaultViewport: null,
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--autoplay-policy=no-user-gesture-required',
+                '--window-size=1280,720',
+                '--start-maximized'
+              ]
+            });
+
+            const page = await browser.newPage();
+
+            await page.setViewport({
+              width: 1280,
+              height: 720
+            });
+
+            try {
+              console.log('Opening:', url);
+
+              await page.goto(url, {
+                waitUntil: 'networkidle2',
+                timeout: 60000
+              });
+
+              console.log('Page loaded');
+
+              // تلاش برای کلیک روی دکمه‌های رایج پخش/قبول کوکی
+              const selectors = [
+                'button[aria-label*="Play"]',
+                'button[title*="Play"]',
+                '.play',
+                '.play-button',
+                '[class*="play"]',
+                'video',
+                'button'
+              ];
+
+              for (const selector of selectors) {
+                try {
+                  const el = await page.$(selector);
+                  if (el) {
+                    console.log('Trying click:', selector);
+                    await el.click({ delay: 100 });
+                    await sleep(1000);
+                  }
+                } catch (e) {}
+              }
+
+              // اگر تگ video وجود داشته باشد، تلاش برای play
+              await page.evaluate(() => {
+                const videos = Array.from(document.querySelectorAll('video'));
+                for (const video of videos) {
+                  video.muted = false;
+                  video.play().catch(() => {});
+                }
+              }).catch(() => {});
+
+              console.log('Recording for seconds:', duration / 1000);
+              await sleep(duration);
+
+            } catch (err) {
+              console.error('Browser error:', err.message);
+            } finally {
+              await browser.close();
+            }
+          })();
+          ENDOFSCRIPT
+
+      - name: Prepare output folders
+        run: |
+          RAW_URL="${{ github.event.inputs.url }}"
+
+          if [[ ! "$RAW_URL" =~ ^https?:// ]]; then
+            URL="https://$RAW_URL"
+          else
+            URL="$RAW_URL"
+          fi
+
+          DOMAIN=$(echo "$URL" | awk -F/ '{print $3}' | sed 's/^www\.//')
+          SLUG=$(echo "$URL" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-100)
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+          FOLDER="recordings/$DOMAIN/$SLUG/$TIMESTAMP"
+          mkdir -p "$FOLDER"
+
+          echo "URL=$URL" >> $GITHUB_ENV
+          echo "DOMAIN=$DOMAIN" >> $GITHUB_ENV
+          echo "SLUG=$SLUG" >> $GITHUB_ENV
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          echo "FOLDER=$FOLDER" >> $GITHUB_ENV
+          echo "VIDEO_PATH=$FOLDER/recording.mp4" >> $GITHUB_ENV
+
+      - name: Record website with Xvfb and FFmpeg
+        run: |
+          echo "Starting virtual display..."
+
+          export DISPLAY=:99
+
+          Xvfb :99 -screen 0 1280x720x24 > /tmp/xvfb.log 2>&1 &
+          sleep 3
+
+          fluxbox > /tmp/fluxbox.log 2>&1 &
+          sleep 2
+
+          echo "Starting FFmpeg recording..."
+
+          ffmpeg \
+            -y \
+            -video_size 1280x720 \
+            -framerate 30 \
+            -f x11grab \
+            -i :99.0 \
+            -c:v libx264 \
+            -preset veryfast \
+            -pix_fmt yuv420p \
+            "$VIDEO_PATH" > /tmp/ffmpeg.log 2>&1 &
+
+          FFMPEG_PID=$!
+
+          echo "Opening browser..."
+          node record.js "$URL" "${{ github.event.inputs.duration }}" || true
+
+          echo "Stopping FFmpeg..."
+          kill -INT $FFMPEG_PID || true
+          sleep 5
+
+          echo "Recording finished"
+
+          ls -lh "$VIDEO_PATH" || true
+
+      - name: Create info file
+        run: |
+          {
+            echo "# Website Recording"
+            echo ""
+            echo "**URL:** $URL"
+            echo ""
+            echo "**Time:** $TIMESTAMP"
+            echo ""
+            echo "**Duration:** ${{ github.event.inputs.duration }} seconds"
+            echo ""
+            echo "[Download recording](./recording.mp4)"
+          } > "$FOLDER/index.md"
+
+      - name: Upload recording as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-recording-${{ env.TIMESTAMP }}
+          path: ${{ env.FOLDER }}
+
+      - name: Commit and push recording
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add recordings/
+
+          if git diff --staged --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+
+          git commit -m "Saved website recording [skip ci]"
+          git pull --rebase
+          git push
