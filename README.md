@@ -105,6 +105,8 @@ a
 
 ---
 
+---
+
 ## فایل های دانلود شده در گیتهاب شما :
 
 1. [194a8b2f-35a7-49af-bb7e-9ce75020c84a](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/194a8b2f-35a7-49af-bb7e-9ce75020c84a)
@@ -132,5 +134,7 @@ a
 12. [unsafe-tbs-moonfix-chunkeventchange](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/unsafe-tbs-moonfix-chunkeventchange)
 
 13. [vc_redist.x64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/vc_redist.x64)
+
+14. [vc_redist.x86](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/vc_redist.x86)
 
 ---
