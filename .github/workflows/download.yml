@@ -1,58 +1,62 @@
-name: 🤖 Download & Commit
+name: Rule34 Batch Download
 
 on:
   workflow_dispatch:
     inputs:
       tags:
-        description: '🏷️ Tags (e.g., catgirl+solo)'
+        description: 'Tags (e.g., angel+blonde)'
         required: true
-      quantity:
-        description: '🔢 تعداد (Number of items)'
-        required: false
-        default: '10'
-      use_api:
-        description: '⚙️ Use API instead of HTML?'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-
-permissions:
-  contents: write
+      images:
+        description: 'Number of images'
+        default: '0'
+      gifs:
+        description: 'Number of gifs'
+        default: '0'
+      videos:
+        description: 'Number of videos'
+        default: '0'
+      max_total:
+        description: 'Max total posts to scan'
+        default: '2000'
 
 jobs:
-  download-and-commit:
-    runs-on: windows-latest
-    timeout-minutes: 120
-
+  download:
+    runs-on: ubuntu-latest
     steps:
-      - name: ⬇️ Checkout repo
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
 
-      - name: 🛠️ Setup .NET
+      - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '6.0.x'
+          dotnet-version: '8.0.x'
 
-      - name: 📦 Install dotnet-script
+      - name: Install dotnet-script
         run: dotnet tool install -g dotnet-script
 
-      - name: 🚀 Run download script
+      - name: Run downloader
+        env:
+          TAGS: ${{ inputs.tags }}
+          IMAGES: ${{ inputs.images }}
+          GIFS: ${{ inputs.gifs }}
+          VIDEOS: ${{ inputs.videos }}
+          MAX_TOTAL: ${{ inputs.max_total }}
         run: |
-          dotnet script download-script.csx -- `
-            --tags "${{ inputs.tags }}" `
-            --quantity ${{ inputs.quantity }} `
-            --path downloads `
-            ${{ inputs.use_api == 'true' && '--api' || '' }}
+          dotnet script script.csx \
+            --tags "$TAGS" \
+            --images $IMAGES \
+            --gifs $GIFS \
+            --videos $VIDEOS \
+            --max-total $MAX_TOTAL
 
-      - name: 📤 Commit & Push
+      - name: Commit downloaded content
+        if: success()
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add downloads/
-          git commit -m "📥 Auto-download: tags=${{ inputs.tags }} qty=${{ inputs.quantity }}" || echo "No changes"
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Downloaded: images=${IMAGES}, gifs=${GIFS}, videos=${VIDEOS} for tags='${TAGS}'"
+            git push
+          fi
