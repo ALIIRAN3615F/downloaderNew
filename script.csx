@@ -52,9 +52,9 @@ HttpClient CreateClient()
     return client;
 }
 
-async Task DownloadFileAsync(string url, string savePath)
+async Task<bool> DownloadFileAsync(string url, string savePath)
 {
-    if (File.Exists(savePath)) return;
+    if (File.Exists(savePath)) return false;
     Directory.CreateDirectory(Path.GetDirectoryName(savePath)!);
 
     using var client = CreateClient();
@@ -68,7 +68,7 @@ async Task DownloadFileAsync(string url, string savePath)
             using var file = File.Create(savePath);
             await stream.CopyToAsync(file);
             Console.WriteLine($"  ✅ {savePath}");
-            return;
+            return true;
         }
         catch (Exception ex)
         {
@@ -76,6 +76,7 @@ async Task DownloadFileAsync(string url, string savePath)
             await Task.Delay(2000);
         }
     }
+    return false;
 }
 
 // ========== API mode ==========
@@ -101,25 +102,43 @@ async Task ApiMode()
         foreach (XmlNode post in posts)
         {
             if (dlImages >= wantedImages && dlGifs >= wantedGifs && dlVideos >= wantedVideos) break;
+            
             var fileUrl = post.Attributes?["file_url"]?.Value;
             if (fileUrl == null) continue;
+            
             string ext = Path.GetExtension(fileUrl)?.ToLowerInvariant() ?? "";
             string id = post.Attributes["id"].Value;
             string fileName = $"{id}{ext}";
-            string subDir = ext switch
+            
+            // تشخیص نوع فایل بر اساس پسوند
+            bool downloaded = false;
+            
+            if (ext == ".mp4" || ext == ".webm")
             {
-                ".mp4" or ".webm" when dlVideos < wantedVideos => "Video",
-                ".gif" when dlGifs < wantedGifs => "Gif",
-                _ when dlImages < wantedImages && ext != ".mp4" && ext != ".webm" && ext != ".gif" && !string.IsNullOrEmpty(ext) => "Images",
-                _ => null
-            };
-            if (subDir != null)
-            {
-                await DownloadFileAsync(fileUrl, Path.Combine(outputDir, subDir, fileName));
-                if (subDir == "Video") dlVideos++;
-                else if (subDir == "Gif") dlGifs++;
-                else dlImages++;
+                if (dlVideos < wantedVideos)
+                {
+                    downloaded = await DownloadFileAsync(fileUrl, Path.Combine(outputDir, "Video", fileName));
+                    if (downloaded) dlVideos++;
+                }
             }
+            else if (ext == ".gif")
+            {
+                if (dlGifs < wantedGifs)
+                {
+                    downloaded = await DownloadFileAsync(fileUrl, Path.Combine(outputDir, "Gif", fileName));
+                    if (downloaded) dlGifs++;
+                }
+            }
+            else if (!string.IsNullOrEmpty(ext) && ext != ".swf" && ext != ".zip")
+            {
+                // تصاویر (jpg, png, etc.)
+                if (dlImages < wantedImages)
+                {
+                    downloaded = await DownloadFileAsync(fileUrl, Path.Combine(outputDir, "Images", fileName));
+                    if (downloaded) dlImages++;
+                }
+            }
+            
             await Task.Delay(150);
         }
         pid++;
@@ -162,65 +181,94 @@ async Task HtmlMode()
         foreach (var postUrl in postUrls)
         {
             if (dlImages >= wantedImages && dlGifs >= wantedGifs && dlVideos >= wantedVideos) break;
+            
             var postDoc = web.Load(postUrl);
-
-            // ** اولویت با تشخیص ویدیو از تگ <video> **
-            var videoSource = postDoc.DocumentNode.SelectSingleNode("//video[@id='gelcomVideoPlayer']/source");
-            if (videoSource != null && dlVideos < wantedVideos)
+            bool downloaded = false;
+            
+            // اولویت ۱: بررسی ویدیو
+            if (dlVideos < wantedVideos)
             {
-                var vidUrl = videoSource.GetAttributeValue("src", null);
-                if (!string.IsNullOrEmpty(vidUrl))
+                var videoSource = postDoc.DocumentNode.SelectSingleNode("//video[@id='gelcomVideoPlayer']/source");
+                if (videoSource != null)
                 {
-                    // حذف query string
-                    if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
-                    string fname = Path.GetFileName(vidUrl);
-                    await DownloadFileAsync(vidUrl, Path.Combine(outputDir, "Video", fname));
-                    dlVideos++;
-                    await Task.Delay(150);
-                    continue; // برو پست بعدی
-                }
-            }
-
-            // og:video به عنوان روش پشتیبان
-            var ogVideo = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:video']");
-            if (ogVideo != null && dlVideos < wantedVideos)
-            {
-                var vidUrl = ogVideo.GetAttributeValue("content", null);
-                if (!string.IsNullOrEmpty(vidUrl))
-                {
-                    if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
-                    string fname = Path.GetFileName(vidUrl);
-                    await DownloadFileAsync(vidUrl, Path.Combine(outputDir, "Video", fname));
-                    dlVideos++;
-                    await Task.Delay(150);
-                    continue;
-                }
-            }
-
-            // og:image برای تصویر یا گیف
-            var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
-            if (ogImage != null)
-            {
-                var imgUrl = ogImage.GetAttributeValue("content", null);
-                if (!string.IsNullOrEmpty(imgUrl))
-                {
-                    if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.LastIndexOf('?'));
-                    string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
-                    string fname = Path.GetFileName(imgUrl);
-
-                    if (ext == ".gif" && dlGifs < wantedGifs)
+                    var vidUrl = videoSource.GetAttributeValue("src", null);
+                    if (!string.IsNullOrEmpty(vidUrl))
                     {
-                        await DownloadFileAsync(imgUrl, Path.Combine(outputDir, "Gif", fname));
-                        dlGifs++;
+                        if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
+                        string fname = Path.GetFileName(vidUrl);
+                        downloaded = await DownloadFileAsync(vidUrl, Path.Combine(outputDir, "Video", fname));
+                        if (downloaded) dlVideos++;
+                        await Task.Delay(150);
+                        continue;
                     }
-                    else if (ext != ".gif" && !string.IsNullOrEmpty(ext) && dlImages < wantedImages)
+                }
+                
+                // روش پشتیبان برای ویدیو
+                var ogVideo = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:video']");
+                if (ogVideo != null)
+                {
+                    var vidUrl = ogVideo.GetAttributeValue("content", null);
+                    if (!string.IsNullOrEmpty(vidUrl))
                     {
-                        await DownloadFileAsync(imgUrl, Path.Combine(outputDir, "Images", fname));
-                        dlImages++;
+                        if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
+                        string fname = Path.GetFileName(vidUrl);
+                        downloaded = await DownloadFileAsync(vidUrl, Path.Combine(outputDir, "Video", fname));
+                        if (downloaded) dlVideos++;
+                        await Task.Delay(150);
+                        continue;
                     }
-                    await Task.Delay(150);
                 }
             }
+            
+            // اولویت ۲: بررسی گیف
+            if (dlGifs < wantedGifs)
+            {
+                var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
+                if (ogImage != null)
+                {
+                    var imgUrl = ogImage.GetAttributeValue("content", null);
+                    if (!string.IsNullOrEmpty(imgUrl))
+                    {
+                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.LastIndexOf('?'));
+                        string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
+                        
+                        if (ext == ".gif")
+                        {
+                            string fname = Path.GetFileName(imgUrl);
+                            downloaded = await DownloadFileAsync(imgUrl, Path.Combine(outputDir, "Gif", fname));
+                            if (downloaded) dlGifs++;
+                            await Task.Delay(150);
+                            continue;
+                        }
+                    }
+                }
+            }
+            
+            // اولویت ۳: بررسی تصویر (اگر نه ویدیو و نه گیف بود)
+            if (dlImages < wantedImages)
+            {
+                var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
+                if (ogImage != null)
+                {
+                    var imgUrl = ogImage.GetAttributeValue("content", null);
+                    if (!string.IsNullOrEmpty(imgUrl))
+                    {
+                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.LastIndexOf('?'));
+                        string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
+                        
+                        if (ext != ".gif" && !string.IsNullOrEmpty(ext))
+                        {
+                            string fname = Path.GetFileName(imgUrl);
+                            downloaded = await DownloadFileAsync(imgUrl, Path.Combine(outputDir, "Images", fname));
+                            if (downloaded) dlImages++;
+                            await Task.Delay(150);
+                            continue;
+                        }
+                    }
+                }
+            }
+            
+            await Task.Delay(150);
         }
         pid += 42;
         Console.WriteLine($"📊 images {dlImages}/{wantedImages} | gifs {dlGifs}/{wantedGifs} | videos {dlVideos}/{wantedVideos}");
