@@ -19,8 +19,8 @@ int wantedVideos = 0;
 string tags      = null;
 string outputDir = "downloads";
 bool useApi = true;
-int maxTotalPosts = 2000;   // فقط برای حالت API
-int maxPagesHTML = 50;      // حداکثر صفحات در حالت HTML (برای جلوگیری از تسلسل)
+int maxTotalPosts = 2000;
+int maxPagesHTML = 50;
 
 // ===================== پارس آرگومان‌ها =====================
 var args = Args.ToArray();
@@ -42,7 +42,6 @@ for (int i = 0; i < args.Length; i++)
         maxTotalPosts = int.Parse(args[++i]);
 }
 
-// بررسی حداقل نیاز
 if (string.IsNullOrWhiteSpace(tags) || (wantedImages + wantedGifs + wantedVideos == 0))
 {
     Console.Error.WriteLine("Usage: dotnet script script.csx --tags <tags> [--images <n>] [--gifs <n>] [--videos <n>] [--path <dir>] [--no-api] [--max-total <n>]");
@@ -55,7 +54,7 @@ Console.WriteLine($"🚀 شروع دانلود: tags='{tags}' | images={wantedIm
 Console.WriteLine($"📁 پوشه خروجی: {Path.GetFullPath(outputDir)}");
 Console.WriteLine($"🔧 حالت: {(useApi ? "API" : "HTML (Scraping)")}");
 
-// ===================== HTTP Client با کوکی‌ها =====================
+// ===================== HTTP Client =====================
 HttpClient CreateHttpClient()
 {
     var handler = new HttpClientHandler
@@ -72,7 +71,7 @@ HttpClient CreateHttpClient()
     return client;
 }
 
-// ===================== سرویس دانلود فایل =====================
+// ===================== دانلود فایل =====================
 async Task DownloadFileAsync(string url, string savePath)
 {
     if (File.Exists(savePath))
@@ -232,7 +231,7 @@ async Task DownloadWithHTML()
     int downloadedImages = 0, downloadedGifs = 0, downloadedVideos = 0;
     int pid = 0;
     string baseUrl = "https://rule34.xxx/index.php?page=post&s=list&tags=" + Uri.EscapeDataString(tags).Replace("%20", "+");
-    const int pageSize = 42;  // تعداد پیش‌فرض پست در هر صفحه لیست
+    const int pageSize = 42;
 
     while ((downloadedImages < wantedImages || downloadedGifs < wantedGifs || downloadedVideos < wantedVideos)
            && pid / pageSize < maxPagesHTML)
@@ -240,7 +239,6 @@ async Task DownloadWithHTML()
         string listUrl = $"{baseUrl}&pid={pid}";
         Console.WriteLine($"\n📄 صفحه HTML {pid/pageSize}: {listUrl}");
         
-        // دریافت لیست پست‌ها با Cookie
         HtmlDocument listDoc;
         try
         {
@@ -306,23 +304,18 @@ async Task DownloadWithHTML()
                 continue;
             }
 
-            // تشخیص ویدیو از og:video
+            // ۱. اول og:video را چک کن
             var ogVideoNode = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:video']");
             if (ogVideoNode != null && downloadedVideos < wantedVideos)
             {
                 var videoUrl = ogVideoNode.GetAttributeValue("content", null);
                 if (!string.IsNullOrEmpty(videoUrl))
                 {
-                    // استخراج شناسه از URL (پارامتر بعد از ?)
-                    string id = "";
+                    // حذف query string
                     if (videoUrl.Contains('?'))
-                    {
-                        id = Path.GetFileNameWithoutExtension(videoUrl.Split('?')[0]);
-                    }
-                    else
-                    {
-                        id = Path.GetFileNameWithoutExtension(videoUrl);
-                    }
+                        videoUrl = videoUrl.Substring(0, videoUrl.LastIndexOf('?'));
+                    
+                    string id = Path.GetFileNameWithoutExtension(videoUrl);
                     string ext = Path.GetExtension(videoUrl)?.ToLowerInvariant() ?? ".mp4";
                     string fileName = $"{id}{ext}";
                     string savePath = Path.Combine(outputDir, "Video", fileName);
@@ -330,27 +323,22 @@ async Task DownloadWithHTML()
                     await DownloadFileAsync(videoUrl, savePath);
                     downloadedVideos++;
                     await Task.Delay(150);
-                    continue;
+                    continue; // به پست بعدی برو
                 }
             }
 
-            // تشخیص تصویر/گیف از og:image
+            // ۲. اگر ویدیو نبود، og:image را چک کن
             var ogImageNode = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
             if (ogImageNode != null)
             {
                 var imgUrl = ogImageNode.GetAttributeValue("content", null);
                 if (!string.IsNullOrEmpty(imgUrl))
                 {
-                    string id = "";
+                    // حذف query string
                     if (imgUrl.Contains('?'))
-                    {
-                        id = imgUrl.Split('?')[1];
                         imgUrl = imgUrl.Substring(0, imgUrl.LastIndexOf('?'));
-                    }
-                    else
-                    {
-                        id = Path.GetFileNameWithoutExtension(imgUrl);
-                    }
+                    
+                    string id = Path.GetFileNameWithoutExtension(imgUrl);
                     string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
                     string fileName = $"{id}{ext}";
 
