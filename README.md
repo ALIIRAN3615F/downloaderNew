@@ -101,6 +101,8 @@ a
 
 ---
 
+---
+
 ## فایل های دانلود شده در گیتهاب شما :
 
 1. [194a8b2f-35a7-49af-bb7e-9ce75020c84a](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/194a8b2f-35a7-49af-bb7e-9ce75020c84a)
@@ -123,10 +125,8 @@ a
 
 10. [node-v16.14.0-win-x64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/node-v16.14.0-win-x64)
 
-11. [unsafe-tbs-moonfix-chunkeventchange](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/unsafe-tbs-moonfix-chunkeventchange)
+11. [node-v16.14.0-x86](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/node-v16.14.0-x86)
 
-12. [windows10.0-kb5013942-x64_6dc7730c205a77a68542e68a70e683b079662226](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/windows10.0-kb5013942-x64_6dc7730c205a77a68542e68a70e683b079662226)
-
-13. [windows10.0-kb5055612-x64_126e24dc4ef01f839352e406d6cee570a43b3a8b](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/windows10.0-kb5055612-x64_126e24dc4ef01f839352e406d6cee570a43b3a8b)
+12. [unsafe-tbs-moonfix-chunkeventchange](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/unsafe-tbs-moonfix-chunkeventchange)
 
 ---
