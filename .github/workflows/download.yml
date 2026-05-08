@@ -4,83 +4,81 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Tags (comma separated)'
+        description: 'Tags to search for'
         required: true
         default: 'catGirl'
       images:
-        description: 'Number of images'
-        required: true
+        description: 'Number of images to download'
+        required: false
         default: '5'
       gifs:
-        description: 'Number of GIFs'
-        required: true
+        description: 'Number of gifs to download'
+        required: false
         default: '3'
       videos:
-        description: 'Number of videos'
-        required: true
+        description: 'Number of videos to download'
+        required: false
         default: '10'
       video_min_duration:
-        description: 'Minimum video duration (seconds, 0=no filter)'
-        required: true
+        description: 'Minimum video duration in seconds'
+        required: false
         default: '0'
       compress_files:
-        description: 'Compress files >50MB?'
-        required: true
+        description: 'Compress files larger than 90MB'
+        required: false
         default: 'true'
       max_total:
-        description: 'Max posts to check'
-        required: true
+        description: 'Maximum number of posts to check'
+        required: false
         default: '3000'
+      site:
+        description: 'Site to download from (RX, RP, RN, BB, EN, RS)'
+        required: false
+        default: 'RX'
 
 jobs:
   download:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # حل هشدار Node 20
-    
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup .NET 8.0
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
+      - name: Setup .NET 8.0
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
 
-    - name: Install dotnet-script
-      run: dotnet tool install -g dotnet-script
+      - name: Install dotnet-script
+        run: dotnet tool install -g dotnet-script
 
-    - name: Run Download Script
-      run: |
-        EXTRA_ARGS=""
-        if [ "${{ github.event.inputs.compress_files }}" = "false" ]; then
-          EXTRA_ARGS="--no-compress"
-        fi
-        
-        dotnet script script.csx \
-          --tags "${{ github.event.inputs.tags }}" \
-          --images ${{ github.event.inputs.images }} \
-          --gifs ${{ github.event.inputs.gifs }} \
-          --videos ${{ github.event.inputs.videos }} \
-          --video-min-duration ${{ github.event.inputs.video_min_duration }} \
-          --max-total ${{ github.event.inputs.max_total }} \
-          $EXTRA_ARGS
+      - name: Run Download Script
+        run: |
+          SCRIPT_ARGS="--tags \"${{ inputs.tags }}\" \
+            --images ${{ inputs.images }} \
+            --gifs ${{ inputs.gifs }} \
+            --videos ${{ inputs.videos }} \
+            --video-min-duration ${{ inputs.video_min_duration }} \
+            --max-total ${{ inputs.max_total }} \
+            --site ${{ inputs.site }}"
+          
+          if [ "${{ inputs.compress_files }}" = "false" ]; then
+            SCRIPT_ARGS="$SCRIPT_ARGS --no-compress"
+          fi
+          
+          dotnet script script.csx $SCRIPT_ARGS
 
-    - name: Configure Git for push
-      run: |
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
+      - name: Configure Git for push
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
 
-    - name: Commit and Push changes
-      run: |
-        git add downloads/
-        
-        if git diff --cached --quiet; then
-          echo "No changes to commit"
-        else
-          git commit -m "Update: ${{ github.event.inputs.tags }} | I:${{ github.event.inputs.images }} G:${{ github.event.inputs.gifs }} V:${{ github.event.inputs.videos }} MinDur:${{ github.event.inputs.video_min_duration }}s"
-          git pull --rebase origin main || echo "Pull failed, continuing"
-          git push origin main
-        fi
+      - name: Commit and Push changes
+        run: |
+          git add .
+          if ! git diff --cached --quiet; then
+            git commit -m "Downloaded content for tags: ${{ inputs.tags }} from site: ${{ inputs.site }}"
+            git push
+          else
+            echo "No changes to commit"
+          fi
