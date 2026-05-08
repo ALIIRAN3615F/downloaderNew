@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Comma separated tags'
+        description: 'Tags (comma separated)'
         required: true
         default: 'catGirl'
       images:
@@ -18,81 +18,86 @@ on:
       videos:
         description: 'Number of videos'
         required: true
-        default: '2'
-      use_api:
-        description: 'Use API mode?'
+        default: '10'
+      video_min_duration:
+        description: 'Minimum video duration (seconds, 0=no filter)'
         required: true
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      compress_files:
-        description: 'Compress large files?'
+        default: '0'
+      use_api:
+        description: 'Use API mode? (recommended)'
         required: true
         default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      max_total:
-        description: 'Maximum total posts to check'
+      compress_files:
+        description: 'Compress files >50MB?'
         required: true
-        default: '1000'
-
-env:
-  IMAGES: ${{ github.event.inputs.images }}
-  GIFS: ${{ github.event.inputs.gifs }}
-  VIDEOS: ${{ github.event.inputs.videos }}
-  USE_API: ${{ github.event.inputs.use_api }}
-  COMPRESS_FILES: ${{ github.event.inputs.compress_files }}
-  MAX_TOTAL: ${{ github.event.inputs.max_total }}
+        default: 'true'
+      max_total:
+        description: 'Max posts to check'
+        required: true
+        default: '3000'
 
 jobs:
   download:
     runs-on: ubuntu-latest
-    
+    env:
+      IMAGES: ${{ github.event.inputs.images }}
+      GIFS: ${{ github.event.inputs.gifs }}
+      VIDEOS: ${{ github.event.inputs.videos }}
+      VIDEO_MIN_DUR: ${{ github.event.inputs.video_min_duration }}
+      USE_API: ${{ github.event.inputs.use_api }}
+      COMPRESS_FILES: ${{ github.event.inputs.compress_files }}
+      MAX_TOTAL: ${{ github.event.inputs.max_total }}
+      TAGS: ${{ github.event.inputs.tags }}
+
     steps:
-    - name: Checkout repository
+    - name: Checkout repository (full history for pull/push)
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    
-    - name: Setup .NET
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup .NET 8.0
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
-    
+
     - name: Install dotnet-script
       run: dotnet tool install -g dotnet-script
-    
+
     - name: Run Download Script
       run: |
+        EXTRA_ARGS=""
         if [ "$USE_API" = "false" ]; then
-          dotnet script script.csx --tags "${{ github.event.inputs.tags }}" \
-            --images $IMAGES \
-            --gifs $GIFS \
-            --videos $VIDEOS \
-            --max-total $MAX_TOTAL \
-            --no-api
-        else
-          dotnet script script.csx --tags "${{ github.event.inputs.tags }}" \
-            --images $IMAGES \
-            --gifs $GIFS \
-            --videos $VIDEOS \
-            --max-total $MAX_TOTAL
+          EXTRA_ARGS="--no-api"
         fi
-    
-    - name: Setup Git
+        if [ "$COMPRESS_FILES" = "false" ]; then
+          EXTRA_ARGS="$EXTRA_ARGS --no-compress"
+        fi
+        
+        dotnet script script.csx \
+          --tags "$TAGS" \
+          --images $IMAGES \
+          --gifs $GIFS \
+          --videos $VIDEOS \
+          --video-min-duration $VIDEO_MIN_DUR \
+          --max-total $MAX_TOTAL \
+          $EXTRA_ARGS
+
+    - name: Commit and Push changes
+      shell: bash
       run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-    
-    - name: Add and Commit changes
-      run: |
+        # ابتدا pull برای گرفتن آخرین تغییرات (اگر کسی دیگری push کرده باشد)
+        git pull --rebase origin main || echo "Pull failed or no changes, continuing"
+        
+        # حالا فایل‌های جدید را stage می‌کنیم
         git add downloads/
-        git pull --rebase origin main
-        git commit -m "Update: Downloaded content for tag '${{ github.event.inputs.tags }}' - Images:$IMAGES GIFs:$GIFS Videos:$VIDEOS" || echo "No changes to commit"
-    
-    - name: Push changes
-      run: git push origin main
+        
+        # اگر تغییری نبوده commit انجام نمی‌شود
+        if git diff --cached --quiet; then
+          echo "No changes to commit"
+        else
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git commit -m "Update: $TAGS | I:$IMAGES G:$GIFS V:$VIDEOS MinDur:${VIDEO_MIN_DUR}s"
+          git push origin main
+        fi
