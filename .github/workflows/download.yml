@@ -4,81 +4,106 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Tags to search for'
+        description: 'Search tags (comma separated)'
         required: true
         default: 'catGirl'
+        type: string
       images:
         description: 'Number of images to download'
-        required: false
-        default: '5'
+        required: true
+        default: 5
+        type: number
       gifs:
-        description: 'Number of gifs to download'
-        required: false
-        default: '3'
+        description: 'Number of GIFs to download'
+        required: true
+        default: 3
+        type: number
       videos:
         description: 'Number of videos to download'
-        required: false
-        default: '10'
+        required: true
+        default: 10
+        type: number
       video_min_duration:
         description: 'Minimum video duration in seconds'
-        required: false
-        default: '0'
+        required: true
+        default: 0
+        type: number
       compress_files:
-        description: 'Compress files larger than 90MB'
-        required: false
+        description: 'Compress files larger than 90MB (true/false)'
+        required: true
         default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       max_total:
         description: 'Maximum number of posts to check'
-        required: false
-        default: '3000'
+        required: true
+        default: 3000
+        type: number
       site:
         description: 'Site to download from (RX, RP, RN, BB, EN, RS)'
-        required: false
+        required: true
         default: 'RX'
+        type: choice
+        options:
+          - 'RX'
+          - 'RP'
+          - 'RN'
+          - 'BB'
+          - 'EN'
+          - 'RS'
 
 jobs:
   download:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup .NET 8.0
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Install dotnet-script
-        run: dotnet tool install -g dotnet-script
-
-      - name: Run Download Script
-        run: |
-          SCRIPT_ARGS="--tags \"${{ inputs.tags }}\" \
-            --images ${{ inputs.images }} \
-            --gifs ${{ inputs.gifs }} \
-            --videos ${{ inputs.videos }} \
-            --video-min-duration ${{ inputs.video_min_duration }} \
-            --max-total ${{ inputs.max_total }} \
-            --site ${{ inputs.site }}"
-          
-          if [ "${{ inputs.compress_files }}" = "false" ]; then
-            SCRIPT_ARGS="$SCRIPT_ARGS --no-compress"
-          fi
-          
-          dotnet script script.csx $SCRIPT_ARGS
-
-      - name: Configure Git for push
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-
-      - name: Commit and Push changes
-        run: |
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    
+    - name: Install dotnet-script
+      run: |
+        dotnet tool install -g dotnet-script
+        echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
+    
+    - name: Create downloads directory
+      run: mkdir -p downloads
+    
+    - name: Run download script
+      run: |
+        SCRIPT_ARGS="--tags '${{ github.event.inputs.tags }}' \
+                     --images ${{ github.event.inputs.images }} \
+                     --gifs ${{ github.event.inputs.gifs }} \
+                     --videos ${{ github.event.inputs.videos }} \
+                     --video-min-duration ${{ github.event.inputs.video_min_duration }} \
+                     --max-total ${{ github.event.inputs.max_total }} \
+                     --site '${{ github.event.inputs.site }}'"
+        
+        if [ "${{ github.event.inputs.compress_files }}" = "false" ]; then
+          SCRIPT_ARGS="$SCRIPT_ARGS --no-compress"
+        fi
+        
+        dotnet-script script.csx $SCRIPT_ARGS
+    
+    - name: Configure Git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+    
+    - name: Commit and push if changes exist
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
           git add .
-          if ! git diff --cached --quiet; then
-            git commit -m "Downloaded content for tags: ${{ inputs.tags }} from site: ${{ inputs.site }}"
-            git push
-          else
-            echo "No changes to commit"
-          fi
+          git commit -m "Download content from ${{ github.event.inputs.site }} - Tags: ${{ github.event.inputs.tags }} - $(date +'%Y-%m-%d %H:%M:%S')"
+          git push
+        else
+          echo "No changes to commit"
+        fi
