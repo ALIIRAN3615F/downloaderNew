@@ -810,5 +810,117 @@ public class Program
     }
 }
 
-// اجرای برنامه
-await Program.Main(args);
+// کد اصلی اجرایی
+var arguments = ParseArguments(Args.ToArray());
+
+string tags = arguments.GetValueOrDefault("tags", "catGirl");
+int images = int.Parse(arguments.GetValueOrDefault("images", "5"));
+int gifs = int.Parse(arguments.GetValueOrDefault("gifs", "3"));
+int videos = int.Parse(arguments.GetValueOrDefault("videos", "10"));
+int videoMinDuration = int.Parse(arguments.GetValueOrDefault("video-min-duration", "0"));
+int maxTotal = int.Parse(arguments.GetValueOrDefault("max-total", "3000"));
+string site = arguments.GetValueOrDefault("site", "RX");
+bool compress = !arguments.ContainsKey("no-compress");
+
+const long compressionThreshold = 90 * 1024 * 1024;
+const long partitionThreshold = 90 * 1024 * 1024;
+
+Console.WriteLine($"=== Content Downloader ===");
+Console.WriteLine($"Site: {site}");
+Console.WriteLine($"Tags: {tags}");
+Console.WriteLine($"Targets: {images} images, {gifs} GIFs, {videos} videos (min {videoMinDuration}s)");
+Console.WriteLine($"Max posts to check: {maxTotal}");
+Console.WriteLine($"Compression threshold: {compressionThreshold / (1024 * 1024)}MB");
+Console.WriteLine($"Partition threshold: {partitionThreshold / (1024 * 1024)}MB");
+Console.WriteLine($"Compression enabled: {compress}");
+Console.WriteLine($"Start time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+Console.WriteLine(new string('=', 50));
+
+var scheduler = new ContentScheduler(images, gifs, videos, videoMinDuration);
+var downloadManager = new DownloadManager("downloads", compress, compressionThreshold, partitionThreshold);
+var apiClient = new AdvancedApiClient(site);
+
+var posts = await apiClient.SearchPosts(tags, maxTotal);
+Console.WriteLine($"Found {posts.Count} posts from API");
+
+var downloadedFiles = new List<string>();
+int processedCount = 0;
+
+foreach (var post in posts)
+{
+    if (scheduler.IsComplete())
+        break;
+    
+    if (!scheduler.CanAcceptPost(post))
+        continue;
+    
+    string subFolder = post.Type switch
+    {
+        "image" => "images",
+        "gif" => "gifs",
+        "video" => "videos",
+        _ => "other"
+    };
+    
+    var filePath = await downloadManager.DownloadFileAsync(post.Url, subFolder);
+    
+    if (filePath != null)
+    {
+        downloadedFiles.Add(filePath);
+        scheduler.IncrementCounter(post.Type);
+        scheduler.PrintStatus();
+    }
+    
+    processedCount++;
+    
+    if (processedCount % 10 == 0)
+    {
+        Console.WriteLine($"Processed {processedCount}/{posts.Count} posts");
+    }
+    
+    await Task.Delay(100);
+}
+
+Console.WriteLine(new string('=', 50));
+Console.WriteLine($"Download completed!");
+Console.WriteLine($"Total processed: {processedCount} posts");
+Console.WriteLine($"Successfully downloaded: {downloadedFiles.Count} files");
+Console.WriteLine($"Final status:");
+scheduler.PrintStatus();
+
+var largeFiles = downloadedFiles.Where(f => new FileInfo(f).Length > partitionThreshold).ToList();
+if (largeFiles.Count > 0)
+{
+    Console.WriteLine($"\nLarge files (> {partitionThreshold / (1024 * 1024)}MB):");
+    foreach (var file in largeFiles)
+    {
+        var info = new FileInfo(file);
+        Console.WriteLine($"  {Path.GetFileName(file)}: {info.Length / (1024 * 1024)}MB");
+    }
+}
+
+Console.WriteLine($"\nEnd time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+Console.WriteLine($"Total execution time: {DateTime.Now - DateTime.Now.AddSeconds(-processedCount * 0.1):hh\\:mm\\:ss}");
+
+// تابع ParseArguments برای کد بالا
+Dictionary<string, string> ParseArguments(string[] args)
+{
+    var result = new Dictionary<string, string>();
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i].StartsWith("--"))
+        {
+            string key = args[i].Substring(2);
+            if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+            {
+                result[key] = args[i + 1];
+                i++;
+            }
+            else
+            {
+                result[key] = "true";
+            }
+        }
+    }
+    return result;
+}
