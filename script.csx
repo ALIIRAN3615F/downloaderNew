@@ -18,8 +18,9 @@ using HtmlAgilityPack;
 int wantedImages = 0, wantedGifs = 0, wantedVideos = 0;
 string tags = null, outputDir = "downloads";
 bool useApi = true, compressLargeFiles = true;
-int maxTotalPosts = 2000;
-long maxFileSize = 50 * 1024 * 1024; // 50 MB (GitHub limit)
+int maxTotalPosts = 3000;
+long maxFileSize = 50 * 1024 * 1024; // 50 MB
+int videoMinDuration = 0; // ثانیه
 
 var args = Args.ToArray();
 for (int i = 0; i < args.Length; i++)
@@ -34,22 +35,26 @@ for (int i = 0; i < args.Length; i++)
         case "--no-api": useApi = false; break;
         case "--no-compress": compressLargeFiles = false; break;
         case "--max-total": maxTotalPosts = int.Parse(args[++i]); break;
+        case "--video-min-duration": videoMinDuration = int.Parse(args[++i]); break;
     }
 }
 
 if (string.IsNullOrWhiteSpace(tags) || (wantedImages + wantedGifs + wantedVideos == 0))
 {
-    Console.Error.WriteLine("Usage: dotnet script script.csx --tags <tags> [--images n] [--gifs n] [--videos n] [--path dir] [--no-api] [--no-compress] [--max-total n]");
+    Console.Error.WriteLine("Usage: dotnet script script.csx --tags <tags> [--images n] [--gifs n] [--videos n] [--video-min-duration sec] [--no-api] ...");
     return 1;
 }
 
-// Clean tag for folder name
 string tagFolderName = Regex.Replace(tags, @"[^\w\-]", "_").Trim('_');
 string baseTagDir = Path.Combine(outputDir, tagFolderName);
 
 Console.WriteLine($"🚀 Starting: tags='{tags}' | images={wantedImages}, gifs={wantedGifs}, videos={wantedVideos}");
 Console.WriteLine($"📁 Output: {Path.GetFullPath(baseTagDir)} | Mode: {(useApi ? "API" : "HTML")}");
 Console.WriteLine($"⚙️ Compression: {(compressLargeFiles ? "ON" : "OFF")}");
+if (videoMinDuration > 0)
+    Console.WriteLine($"🎬 Filtering videos >= {videoMinDuration} sec");
+else
+    Console.WriteLine($"🎬 No video duration filter");
 
 HttpClient CreateClient()
 {
@@ -57,16 +62,35 @@ HttpClient CreateClient()
     handler.CookieContainer.Add(new Cookie { Name = "gdpr", Value = "1", Domain = "rule34.xxx", Path = "/" });
     handler.CookieContainer.Add(new Cookie { Name = "gdpr-consent", Value = "1", Domain = "rule34.xxx", Path = "/" });
     var client = new HttpClient(handler);
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
     client.DefaultRequestHeaders.Referrer = new Uri("https://rule34.xxx/");
     client.Timeout = TimeSpan.FromSeconds(30);
     return client;
 }
 
+async Task<double> GetVideoDurationAsync(string postId)
+{
+    try
+    {
+        string apiUrl = $"https://rule34.xxx/index.php?page=dapi&s=post&q=index&id={postId}";
+        using var client = CreateClient();
+        var xml = await client.GetStringAsync(apiUrl);
+        XmlDocument doc = new XmlDocument();
+        doc.LoadXml(xml);
+        var post = doc.SelectSingleNode("//post");
+        if (post != null)
+        {
+            var durStr = post.Attributes?["duration"]?.Value;
+            if (double.TryParse(durStr, out double dur)) return dur;
+        }
+    }
+    catch { }
+    return -1;
+}
+
 async Task<bool> CompressIfNeeded(string filePath)
 {
     if (!compressLargeFiles) return false;
-    
     var fileInfo = new FileInfo(filePath);
     if (fileInfo.Length <= maxFileSize) return false;
     
@@ -75,7 +99,7 @@ async Task<bool> CompressIfNeeded(string filePath)
     {
         using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
         zip.CreateEntryFromFile(filePath, Path.GetFileName(filePath), CompressionLevel.Optimal);
-        Console.WriteLine($"  📦 Compressed {Path.GetFileName(filePath)} ({fileInfo.Length / 1024 / 1024}MB → {new FileInfo(zipPath).Length / 1024 / 1024}MB)");
+        Console.WriteLine($"  📦 Compressed {Path.GetFileName(filePath)} ({fileInfo.Length/1024/1024:F1}MB → {new FileInfo(zipPath).Length/1024/1024:F1}MB)");
         File.Delete(filePath);
         return true;
     }
@@ -98,19 +122,17 @@ async Task<bool> DownloadFileAsync(string url, string savePath, string type)
         {
             using var response = await client.GetAsync(url);
             response.EnsureSuccessStatusCode();
-            
             using var stream = await response.Content.ReadAsStreamAsync();
             using var file = File.Create(savePath);
             await stream.CopyToAsync(file);
             
             await CompressIfNeeded(savePath);
-            
             Console.WriteLine($"  ✅ {type}: {Path.GetFileName(savePath)}");
             return true;
         }
         catch (HttpRequestException ex) when (ex.Message.Contains("404"))
         {
-            Console.WriteLine($"  ❌ File not found: {url}");
+            Console.WriteLine($"  ❌ File not found (404): {url}");
             return false;
         }
         catch (Exception ex)
@@ -122,7 +144,7 @@ async Task<bool> DownloadFileAsync(string url, string savePath, string type)
     return false;
 }
 
-// حالت API
+// ============== API MODE ==============
 async Task ApiMode()
 {
     int dlImages = 0, dlGifs = 0, dlVideos = 0;
@@ -140,7 +162,11 @@ async Task ApiMode()
             var xml = await client.GetStringAsync(apiUrl);
             doc.LoadXml(xml);
         }
-        catch { break; }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"⚠️ API error: {ex.Message}");
+            break;
+        }
 
         var posts = doc.GetElementsByTagName("post");
         if (posts.Count == 0) break;
@@ -155,24 +181,32 @@ async Task ApiMode()
             string ext = Path.GetExtension(fileUrl)?.ToLowerInvariant() ?? "";
             string id = post.Attributes["id"].Value;
             string fileName = $"{id}{ext}";
-            
             bool downloaded = false;
             
-            // اولویت ۱: ویدیو
+            // اولویت: ویدیو
             if (dlVideos < wantedVideos && (ext == ".mp4" || ext == ".webm"))
             {
+                if (videoMinDuration > 0)
+                {
+                    var durStr = post.Attributes?["duration"]?.Value;
+                    if (!double.TryParse(durStr, out double dur) || dur < videoMinDuration)
+                    {
+                        totalChecked++;
+                        continue;
+                    }
+                }
                 downloaded = await DownloadFileAsync(fileUrl, 
                     Path.Combine(baseTagDir, "Video", fileName), "Video");
                 if (downloaded) dlVideos++;
             }
-            // اولویت ۲: گیف
+            // گیف
             else if (dlGifs < wantedGifs && ext == ".gif")
             {
                 downloaded = await DownloadFileAsync(fileUrl, 
                     Path.Combine(baseTagDir, "Gif", fileName), "Gif");
                 if (downloaded) dlGifs++;
             }
-            // اولویت ۳: تصاویر (اگر هنوز نیاز داریم)
+            // تصویر
             else if (dlImages < wantedImages && !string.IsNullOrEmpty(ext) && 
                      ext != ".swf" && ext != ".zip" && ext != ".mp4" && ext != ".webm" && ext != ".gif")
             {
@@ -184,25 +218,15 @@ async Task ApiMode()
             totalChecked++;
             if (downloaded) await Task.Delay(100);
             
-            // نمایش وضعیت هر ۱۰ پست
-            if (totalChecked % 10 == 0)
-            {
-                Console.WriteLine($"📊 Checked: {totalChecked} | images {dlImages}/{wantedImages} | gifs {dlGifs}/{wantedGifs} | videos {dlVideos}/{wantedVideos}");
-            }
+            if (totalChecked % 25 == 0)
+                Console.WriteLine($"📊 Checked: {totalChecked} | I:{dlImages}/{wantedImages} G:{dlGifs}/{wantedGifs} V:{dlVideos}/{wantedVideos}");
         }
         pid++;
-        
-        // اگر در این صفحه چیزی پیدا نکردیم، ادامه بدیم
-        if (dlImages + dlGifs + dlVideos == 0 && pid > 5)
-        {
-            Console.WriteLine($"⚠️ No content found for tag '{tags}' after {pid} pages");
-            break;
-        }
     }
-    Console.WriteLine($"🎉 Done. Checked {totalChecked} posts | images: {dlImages}/{wantedImages} | gifs: {dlGifs}/{wantedGifs} | videos: {dlVideos}/{wantedVideos}");
+    Console.WriteLine($"🎉 Done. Checked {totalChecked} posts | Images:{dlImages}/{wantedImages} Gifs:{dlGifs}/{wantedGifs} Videos:{dlVideos}/{wantedVideos}");
 }
 
-// حالت HTML
+// ============== HTML MODE (بهبودیافته) ==============
 async Task HtmlMode()
 {
     int dlImages = 0, dlGifs = 0, dlVideos = 0;
@@ -214,7 +238,7 @@ async Task HtmlMode()
     {
         PreRequest = request =>
         {
-            request.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+            request.UserAgent = "Mozilla/5.0";
             request.Referer = "https://rule34.xxx/";
             request.Host = "rule34.xxx";
             request.CookieContainer = new CookieContainer();
@@ -229,13 +253,10 @@ async Task HtmlMode()
            totalChecked < maxTotalPosts)
     {
         HtmlDocument listDoc;
-        try
-        {
-            listDoc = web.Load($"{baseUrl}&pid={pid}");
-        }
+        try { listDoc = web.Load($"{baseUrl}&pid={pid}"); }
         catch { break; }
         
-        var thumbs = listDoc.DocumentNode.SelectNodes("//div[@class='content']//span[@class='thumb']/a");
+        var thumbs = listDoc.DocumentNode.SelectNodes("//span[@class='thumb']/a");
         if (thumbs == null || thumbs.Count == 0) break;
 
         var postUrls = thumbs.Select(a => "https://rule34.xxx/" + a.GetAttributeValue("href", "").Replace("&amp;", "&"))
@@ -246,54 +267,50 @@ async Task HtmlMode()
             if (dlImages >= wantedImages && dlGifs >= wantedGifs && dlVideos >= wantedVideos) break;
             
             HtmlDocument postDoc;
-            try
-            {
-                postDoc = web.Load(postUrl);
-            }
-            catch
-            {
-                await Task.Delay(500);
-                continue;
-            }
+            try { postDoc = web.Load(postUrl); }
+            catch { await Task.Delay(500); continue; }
             
             bool downloaded = false;
+            string postIdMatch = Regex.Match(postUrl, @"id=(\d+)").Groups[1].Value;
             
-            // اولویت ۱: ویدیو
+            // ---- ویدیو ----
             if (dlVideos < wantedVideos)
             {
-                var videoSource = postDoc.DocumentNode.SelectSingleNode("//video[@id='gelcomVideoPlayer']/source");
-                if (videoSource != null)
+                // 1. ویدیو با تگ <video>
+                var videoSrc = postDoc.DocumentNode.SelectSingleNode("//video/source")?.GetAttributeValue("src", null);
+                // 2. og:video
+                if (string.IsNullOrEmpty(videoSrc))
+                    videoSrc = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:video']")?.GetAttributeValue("content", null);
+                // 3. لینک مستقیم در صفحه (مثل download link)
+                if (string.IsNullOrEmpty(videoSrc))
                 {
-                    var vidUrl = videoSource.GetAttributeValue("src", null);
-                    if (!string.IsNullOrEmpty(vidUrl))
-                    {
-                        if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
-                        string fname = Path.GetFileName(vidUrl);
-                        downloaded = await DownloadFileAsync(vidUrl, 
-                            Path.Combine(baseTagDir, "Video", fname), "Video");
-                        if (downloaded) dlVideos++;
-                        goto NextPost;
-                    }
+                    var downloadLink = postDoc.DocumentNode.SelectSingleNode("//a[contains(@href,'.mp4') or contains(@href,'.webm')]");
+                    videoSrc = downloadLink?.GetAttributeValue("href", null);
                 }
                 
-                var ogVideo = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:video']");
-                if (ogVideo != null)
+                if (!string.IsNullOrEmpty(videoSrc))
                 {
-                    var vidUrl = ogVideo.GetAttributeValue("content", null);
-                    if (!string.IsNullOrEmpty(vidUrl))
+                    if (videoSrc.Contains('?')) videoSrc = videoSrc.Substring(0, videoSrc.IndexOf('?'));
+                    
+                    // فیلتر duration اگر لازم باشد
+                    if (videoMinDuration > 0 && !string.IsNullOrEmpty(postIdMatch))
                     {
-                        if (vidUrl.Contains('?')) vidUrl = vidUrl.Substring(0, vidUrl.LastIndexOf('?'));
-                        string fname = Path.GetFileName(vidUrl);
-                        downloaded = await DownloadFileAsync(vidUrl, 
-                            Path.Combine(baseTagDir, "Video", fname), "Video");
-                        if (downloaded) dlVideos++;
-                        goto NextPost;
+                        double duration = await GetVideoDurationAsync(postIdMatch);
+                        if (duration >= 0 && duration < videoMinDuration)
+                        {
+                            totalChecked++;
+                            continue;
+                        }
                     }
+                    
+                    string fname = Path.GetFileName(videoSrc);
+                    downloaded = await DownloadFileAsync(videoSrc, Path.Combine(baseTagDir, "Video", fname), "Video");
+                    if (downloaded) dlVideos++;
                 }
             }
             
-            // اولویت ۲: گیف
-            if (dlGifs < wantedGifs)
+            // ---- گیف (فقط از og:image با پسوند gif) ----
+            if (!downloaded && dlGifs < wantedGifs)
             {
                 var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
                 if (ogImage != null)
@@ -301,23 +318,18 @@ async Task HtmlMode()
                     var imgUrl = ogImage.GetAttributeValue("content", null);
                     if (!string.IsNullOrEmpty(imgUrl))
                     {
-                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.LastIndexOf('?'));
-                        string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
-                        
-                        if (ext == ".gif")
+                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.IndexOf('?'));
+                        if (Path.GetExtension(imgUrl)?.ToLowerInvariant() == ".gif")
                         {
-                            string fname = Path.GetFileName(imgUrl);
-                            downloaded = await DownloadFileAsync(imgUrl, 
-                                Path.Combine(baseTagDir, "Gif", fname), "Gif");
+                            downloaded = await DownloadFileAsync(imgUrl, Path.Combine(baseTagDir, "Gif", Path.GetFileName(imgUrl)), "Gif");
                             if (downloaded) dlGifs++;
-                            goto NextPost;
                         }
                     }
                 }
             }
             
-            // اولویت ۳: تصویر
-            if (dlImages < wantedImages)
+            // ---- تصویر ----
+            if (!downloaded && dlImages < wantedImages)
             {
                 var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
                 if (ogImage != null)
@@ -325,41 +337,26 @@ async Task HtmlMode()
                     var imgUrl = ogImage.GetAttributeValue("content", null);
                     if (!string.IsNullOrEmpty(imgUrl))
                     {
-                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.LastIndexOf('?'));
+                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.IndexOf('?'));
                         string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
-                        
-                        if (ext != ".gif" && !string.IsNullOrEmpty(ext))
+                        if (ext != ".gif")
                         {
-                            string fname = Path.GetFileName(imgUrl);
-                            downloaded = await DownloadFileAsync(imgUrl, 
-                                Path.Combine(baseTagDir, "Images", fname), "Image");
+                            downloaded = await DownloadFileAsync(imgUrl, Path.Combine(baseTagDir, "Images", Path.GetFileName(imgUrl)), "Image");
                             if (downloaded) dlImages++;
-                            goto NextPost;
                         }
                     }
                 }
             }
             
-        NextPost:
             totalChecked++;
             if (downloaded) await Task.Delay(100);
             
-            // نمایش وضعیت هر ۵ پست
-            if (totalChecked % 5 == 0)
-            {
-                Console.WriteLine($"📊 Checked: {totalChecked} | images {dlImages}/{wantedImages} | gifs {dlGifs}/{wantedGifs} | videos {dlVideos}/{wantedVideos}");
-            }
+            if (totalChecked % 10 == 0)
+                Console.WriteLine($"📊 Checked: {totalChecked} | I:{dlImages}/{wantedImages} G:{dlGifs}/{wantedGifs} V:{dlVideos}/{wantedVideos}");
         }
-        pid += 42;
-        
-        // اگر در این صفحه چیزی پیدا نکردیم، ادامه بدیم
-        if (dlImages + dlGifs + dlVideos == 0 && pid > 210) // 5 pages
-        {
-            Console.WriteLine($"⚠️ No content found for tag '{tags}' after {pid/42} pages");
-            break;
-        }
+        pid += 42; // هر صفحه 42 پست دارد
     }
-    Console.WriteLine($"🎉 Done. Checked {totalChecked} posts | images: {dlImages}/{wantedImages} | gifs: {dlGifs}/{wantedGifs} | videos: {dlVideos}/{wantedVideos}");
+    Console.WriteLine($"🎉 Done. Checked {totalChecked} posts | Images:{dlImages}/{wantedImages} Gifs:{dlGifs}/{wantedGifs} Videos:{dlVideos}/{wantedVideos}");
 }
 
 if (useApi)
