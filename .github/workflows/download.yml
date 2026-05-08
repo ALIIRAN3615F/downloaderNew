@@ -23,10 +23,6 @@ on:
         description: 'Minimum video duration (seconds, 0=no filter)'
         required: true
         default: '0'
-      use_api:
-        description: 'Use API mode? (recommended)'
-        required: true
-        default: 'true'
       compress_files:
         description: 'Compress files >50MB?'
         required: true
@@ -39,13 +35,14 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # حل هشدار Node 20
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Setup .NET 8.0
       uses: actions/setup-dotnet@v4
@@ -58,11 +55,8 @@ jobs:
     - name: Run Download Script
       run: |
         EXTRA_ARGS=""
-        if [ "${{ github.event.inputs.use_api }}" = "false" ]; then
-          EXTRA_ARGS="--no-api"
-        fi
         if [ "${{ github.event.inputs.compress_files }}" = "false" ]; then
-          EXTRA_ARGS="$EXTRA_ARGS --no-compress"
+          EXTRA_ARGS="--no-compress"
         fi
         
         dotnet script script.csx \
@@ -74,18 +68,19 @@ jobs:
           --max-total ${{ github.event.inputs.max_total }} \
           $EXTRA_ARGS
 
-    - name: Commit and Push changes
-      shell: bash
+    - name: Configure Git for push
       run: |
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
-        
+
+    - name: Commit and Push changes
+      run: |
         git add downloads/
         
         if git diff --cached --quiet; then
           echo "No changes to commit"
         else
-          git pull --rebase origin main || echo "Pull failed, continuing"
           git commit -m "Update: ${{ github.event.inputs.tags }} | I:${{ github.event.inputs.images }} G:${{ github.event.inputs.gifs }} V:${{ github.event.inputs.videos }} MinDur:${{ github.event.inputs.video_min_duration }}s"
+          git pull --rebase origin main || echo "Pull failed, continuing"
           git push origin main
         fi
