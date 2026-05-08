@@ -18,7 +18,8 @@ int wantedImages = 0, wantedGifs = 0, wantedVideos = 0;
 string tags = null, outputDir = "downloads";
 bool compressLargeFiles = true;
 int maxTotalPosts = 3000;
-long maxFileSize = 50 * 1024 * 1024;
+long maxFileSize = 50 * 1024 * 1024;       // برای کمپرس
+long maxDownloadSize = 95 * 1024 * 1024;   // رد کردن فایل بزرگ‌تر از 95MB
 int videoMinDuration = 0;
 
 var args = Args.ToArray();
@@ -49,7 +50,7 @@ string baseTagDir = Path.Combine(outputDir, tagFolderName);
 Console.WriteLine($"Starting: tags='{tags}' | images={wantedImages}, gifs={wantedGifs}, videos={wantedVideos}");
 Console.WriteLine($"Output: {Path.GetFullPath(baseTagDir)}");
 Console.WriteLine($"Mode: HTML Only");
-Console.WriteLine($"Compression: {(compressLargeFiles ? "ON" : "OFF")}");
+Console.WriteLine($"Compression: {(compressLargeFiles ? "ON" : "OFF")} | Max download: {maxDownloadSize/1024/1024}MB");
 if (videoMinDuration > 0)
     Console.WriteLine($"Filtering videos >= {videoMinDuration} sec");
 
@@ -70,26 +71,55 @@ async Task<bool> CompressIfNeeded(string filePath)
     if (!compressLargeFiles) return false;
     var fileInfo = new FileInfo(filePath);
     if (fileInfo.Length <= maxFileSize) return false;
-    
+
     string zipPath = filePath + ".zip";
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        try
+        {
+            // صبر کن فایل کامل بسته بشه
+            await Task.Delay(200 * (attempt + 1));
+            using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
+            zip.CreateEntryFromFile(filePath, Path.GetFileName(filePath), CompressionLevel.Optimal);
+            Console.WriteLine($"  Compressed {Path.GetFileName(filePath)} ({fileInfo.Length/1024/1024:F1}MB → {new FileInfo(zipPath).Length/1024/1024:F1}MB)");
+            File.Delete(filePath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  Compression attempt {attempt+1} failed: {ex.Message}");
+        }
+    }
+    Console.WriteLine($"  Compression failed after retries, keeping original file.");
+    return false;
+}
+
+async Task<long?> GetContentLengthAsync(string url)
+{
     try
     {
-        using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
-        zip.CreateEntryFromFile(filePath, Path.GetFileName(filePath), CompressionLevel.Optimal);
-        Console.WriteLine($"  Compressed {Path.GetFileName(filePath)} ({fileInfo.Length/1024/1024:F1}MB → {new FileInfo(zipPath).Length/1024/1024:F1}MB)");
-        File.Delete(filePath);
-        return true;
+        using var client = CreateClient();
+        var request = new HttpRequestMessage(HttpMethod.Head, url);
+        using var response = await client.SendAsync(request);
+        if (response.IsSuccessStatusCode && response.Content.Headers.ContentLength.HasValue)
+            return response.Content.Headers.ContentLength.Value;
     }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"  Compression failed: {ex.Message}");
-        return false;
-    }
+    catch { }
+    return null;
 }
 
 async Task<bool> DownloadFileAsync(string url, string savePath, string type)
 {
     if (File.Exists(savePath) || File.Exists(savePath + ".zip")) return false;
+
+    // Check size before download
+    long? size = await GetContentLengthAsync(url);
+    if (size.HasValue && size.Value > maxDownloadSize)
+    {
+        Console.WriteLine($"  Skipped (size {size.Value/1024/1024}MB > {maxDownloadSize/1024/1024}MB): {Path.GetFileName(savePath)}");
+        return false;
+    }
+
     Directory.CreateDirectory(Path.GetDirectoryName(savePath)!);
 
     using var client = CreateClient();
@@ -100,9 +130,14 @@ async Task<bool> DownloadFileAsync(string url, string savePath, string type)
             using var response = await client.GetAsync(url);
             response.EnsureSuccessStatusCode();
             using var stream = await response.Content.ReadAsStreamAsync();
-            using var file = File.Create(savePath);
-            await stream.CopyToAsync(file);
-            
+            using (var file = File.Create(savePath))
+            {
+                await stream.CopyToAsync(file);
+                await file.FlushAsync();
+            }
+
+            // Ensure file is fully released
+            await Task.Delay(100);
             await CompressIfNeeded(savePath);
             Console.WriteLine($"  {type}: {Path.GetFileName(savePath)}");
             return true;
