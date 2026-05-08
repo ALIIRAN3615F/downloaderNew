@@ -1,12 +1,15 @@
 #!/usr/bin/env dotnet-script
 #r "nuget: HtmlAgilityPack, 1.11.46"
 #r "nuget: System.IO.Compression, 4.3.0"
+#r "nuget: System.Text.Json, 8.0.5"
 
 using System;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -68,26 +71,6 @@ HttpClient CreateClient()
     return client;
 }
 
-async Task<double> GetVideoDurationAsync(string postId)
-{
-    try
-    {
-        string apiUrl = $"https://rule34.xxx/index.php?page=dapi&s=post&q=index&id={postId}";
-        using var client = CreateClient();
-        var xml = await client.GetStringAsync(apiUrl);
-        XmlDocument doc = new XmlDocument();
-        doc.LoadXml(xml);
-        var post = doc.SelectSingleNode("//post");
-        if (post != null)
-        {
-            var durStr = post.Attributes?["duration"]?.Value;
-            if (double.TryParse(durStr, out double dur)) return dur;
-        }
-    }
-    catch { }
-    return -1;
-}
-
 async Task<bool> CompressIfNeeded(string filePath)
 {
     if (!compressLargeFiles) return false;
@@ -144,91 +127,152 @@ async Task<bool> DownloadFileAsync(string url, string savePath, string type)
     return false;
 }
 
-// ============== API MODE ==============
+// ============== API MODE (Rule34 API v2) ==============
 async Task ApiMode()
 {
     int dlImages = 0, dlGifs = 0, dlVideos = 0;
     int pid = 0;
     int totalChecked = 0;
+    int limit = 100; // حداکثر 100 پست در هر درخواست
+    
+    Console.WriteLine("📡 Using Rule34 API (api.rule34.xxx)");
     
     while ((dlImages < wantedImages || dlGifs < wantedGifs || dlVideos < wantedVideos) && 
            totalChecked < maxTotalPosts)
     {
-        string apiUrl = $"https://rule34.xxx/index.php?page=dapi&s=post&q=index&tags={Uri.EscapeDataString(tags).Replace("%20","+")}&pid={pid}&limit=100";
-        XmlDocument doc = new XmlDocument();
+        string encodedTags = Uri.EscapeDataString(tags).Replace("%20", "+");
+        string apiUrl = $"https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&tags={encodedTags}&pid={pid}&limit={limit}&json=1";
+        
+        Console.WriteLine($"🔍 Fetching API page {pid}...");
+        
         try
         {
             using var client = CreateClient();
-            var xml = await client.GetStringAsync(apiUrl);
-            doc.LoadXml(xml);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"⚠️ API error: {ex.Message}");
-            break;
-        }
-
-        var posts = doc.GetElementsByTagName("post");
-        if (posts.Count == 0) break;
-
-        foreach (XmlNode post in posts)
-        {
-            if (dlImages >= wantedImages && dlGifs >= wantedGifs && dlVideos >= wantedVideos) break;
+            var jsonResponse = await client.GetStringAsync(apiUrl);
             
-            var fileUrl = post.Attributes?["file_url"]?.Value;
-            if (fileUrl == null) continue;
+            // Parse JSON response
+            using JsonDocument doc = JsonDocument.Parse(jsonResponse);
+            var posts = doc.RootElement.EnumerateArray();
             
-            string ext = Path.GetExtension(fileUrl)?.ToLowerInvariant() ?? "";
-            string id = post.Attributes["id"].Value;
-            string fileName = $"{id}{ext}";
-            bool downloaded = false;
-            
-            // اولویت: ویدیو
-            if (dlVideos < wantedVideos && (ext == ".mp4" || ext == ".webm"))
+            if (!posts.Any())
             {
-                if (videoMinDuration > 0)
+                Console.WriteLine("⚠️ No more posts found");
+                break;
+            }
+
+            foreach (var post in posts)
+            {
+                if (dlImages >= wantedImages && dlGifs >= wantedGifs && dlVideos >= wantedVideos) break;
+                
+                // Get post data
+                string fileUrl = post.GetProperty("file_url").GetString();
+                string sampleUrl = post.GetProperty("sample_url").GetString();
+                string previewUrl = post.GetProperty("preview_url").GetString();
+                string image = post.GetProperty("image").GetString();
+                int id = post.GetProperty("id").GetInt32();
+                string tagsString = post.GetProperty("tags").GetString();
+                string rating = post.GetProperty("rating").GetString();
+                int? duration = post.TryGetProperty("duration", out var durElement) ? durElement.GetInt32() : null;
+                int? width = post.TryGetProperty("width", out var widthElement) ? widthElement.GetInt32() : null;
+                int? height = post.TryGetProperty("height", out var heightElement) ? heightElement.GetInt32() : null;
+                
+                // Determine file type from URL
+                string fileUrlLower = fileUrl?.ToLowerInvariant() ?? "";
+                string imageLower = image?.ToLowerInvariant() ?? "";
+                bool isVideo = fileUrlLower.EndsWith(".mp4") || fileUrlLower.EndsWith(".webm") || 
+                              imageLower.EndsWith(".mp4") || imageLower.EndsWith(".webm");
+                bool isGif = fileUrlLower.EndsWith(".gif") || imageLower.EndsWith(".gif");
+                bool isImage = !isVideo && !isGif && !string.IsNullOrEmpty(fileUrl);
+                
+                // Filter video by duration
+                if (isVideo && videoMinDuration > 0)
                 {
-                    var durStr = post.Attributes?["duration"]?.Value;
-                    if (!double.TryParse(durStr, out double dur) || dur < videoMinDuration)
+                    if (!duration.HasValue || duration.Value < videoMinDuration)
                     {
                         totalChecked++;
                         continue;
                     }
                 }
-                downloaded = await DownloadFileAsync(fileUrl, 
-                    Path.Combine(baseTagDir, "Video", fileName), "Video");
-                if (downloaded) dlVideos++;
-            }
-            // گیف
-            else if (dlGifs < wantedGifs && ext == ".gif")
-            {
-                downloaded = await DownloadFileAsync(fileUrl, 
-                    Path.Combine(baseTagDir, "Gif", fileName), "Gif");
-                if (downloaded) dlGifs++;
-            }
-            // تصویر
-            else if (dlImages < wantedImages && !string.IsNullOrEmpty(ext) && 
-                     ext != ".swf" && ext != ".zip" && ext != ".mp4" && ext != ".webm" && ext != ".gif")
-            {
-                downloaded = await DownloadFileAsync(fileUrl, 
-                    Path.Combine(baseTagDir, "Images", fileName), "Image");
-                if (downloaded) dlImages++;
+                
+                bool downloaded = false;
+                string fileName = $"{id}_{Path.GetFileName(fileUrl ?? image)}";
+                
+                // Priority: Video
+                if (isVideo && dlVideos < wantedVideos)
+                {
+                    string downloadUrl = fileUrl ?? sampleUrl;
+                    if (!string.IsNullOrEmpty(downloadUrl))
+                    {
+                        downloaded = await DownloadFileAsync(downloadUrl, 
+                            Path.Combine(baseTagDir, "Video", fileName), "Video");
+                        if (downloaded) dlVideos++;
+                    }
+                }
+                // Gif
+                else if (isGif && dlGifs < wantedGifs)
+                {
+                    string downloadUrl = fileUrl ?? sampleUrl;
+                    if (!string.IsNullOrEmpty(downloadUrl))
+                    {
+                        downloaded = await DownloadFileAsync(downloadUrl, 
+                            Path.Combine(baseTagDir, "Gif", fileName), "Gif");
+                        if (downloaded) dlGifs++;
+                    }
+                }
+                // Image
+                else if (isImage && dlImages < wantedImages)
+                {
+                    string downloadUrl = fileUrl ?? sampleUrl;
+                    if (!string.IsNullOrEmpty(downloadUrl))
+                    {
+                        downloaded = await DownloadFileAsync(downloadUrl, 
+                            Path.Combine(baseTagDir, "Images", fileName), "Image");
+                        if (downloaded) dlImages++;
+                    }
+                }
+                
+                totalChecked++;
+                if (downloaded) await Task.Delay(100);
+                
+                if (totalChecked % 10 == 0)
+                {
+                    Console.WriteLine($"📊 Checked: {totalChecked} | I:{dlImages}/{wantedImages} G:{dlGifs}/{wantedGifs} V:{dlVideos}/{wantedVideos}");
+                }
             }
             
-            totalChecked++;
-            if (downloaded) await Task.Delay(100);
-            
-            if (totalChecked % 25 == 0)
-                Console.WriteLine($"📊 Checked: {totalChecked} | I:{dlImages}/{wantedImages} G:{dlGifs}/{wantedGifs} V:{dlVideos}/{wantedVideos}");
+            pid++;
+            // If we got less posts than limit, we're at the end
+            if (posts.Count() < limit)
+            {
+                Console.WriteLine("📭 Reached end of results");
+                break;
+            }
         }
-        pid++;
+        catch (HttpRequestException ex)
+        {
+            Console.WriteLine($"⚠️ API request failed: {ex.Message}");
+            break;
+        }
+        catch (JsonException ex)
+        {
+            Console.WriteLine($"⚠️ JSON parsing error: {ex.Message}");
+            break;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"⚠️ Unexpected error: {ex.Message}");
+            break;
+        }
     }
+    
     Console.WriteLine($"🎉 Done. Checked {totalChecked} posts | Images:{dlImages}/{wantedImages} Gifs:{dlGifs}/{wantedGifs} Videos:{dlVideos}/{wantedVideos}");
 }
 
-// ============== HTML MODE (بهبودیافته) ==============
+// ============== HTML MODE (برای مواقعی که API کار نمی‌کند) ==============
 async Task HtmlMode()
 {
+    Console.WriteLine("🌐 Falling back to HTML mode (slower, less reliable)");
+    
     int dlImages = 0, dlGifs = 0, dlVideos = 0;
     int pid = 0;
     int totalChecked = 0;
@@ -271,79 +315,48 @@ async Task HtmlMode()
             catch { await Task.Delay(500); continue; }
             
             bool downloaded = false;
-            string postIdMatch = Regex.Match(postUrl, @"id=(\d+)").Groups[1].Value;
             
-            // ---- ویدیو ----
+            // ---- Video ----
             if (dlVideos < wantedVideos)
             {
-                // 1. ویدیو با تگ <video>
                 var videoSrc = postDoc.DocumentNode.SelectSingleNode("//video/source")?.GetAttributeValue("src", null);
-                // 2. og:video
                 if (string.IsNullOrEmpty(videoSrc))
                     videoSrc = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:video']")?.GetAttributeValue("content", null);
-                // 3. لینک مستقیم در صفحه (مثل download link)
-                if (string.IsNullOrEmpty(videoSrc))
-                {
-                    var downloadLink = postDoc.DocumentNode.SelectSingleNode("//a[contains(@href,'.mp4') or contains(@href,'.webm')]");
-                    videoSrc = downloadLink?.GetAttributeValue("href", null);
-                }
                 
                 if (!string.IsNullOrEmpty(videoSrc))
                 {
-                    if (videoSrc.Contains('?')) videoSrc = videoSrc.Substring(0, videoSrc.IndexOf('?'));
-                    
-                    // فیلتر duration اگر لازم باشد
-                    if (videoMinDuration > 0 && !string.IsNullOrEmpty(postIdMatch))
-                    {
-                        double duration = await GetVideoDurationAsync(postIdMatch);
-                        if (duration >= 0 && duration < videoMinDuration)
-                        {
-                            totalChecked++;
-                            continue;
-                        }
-                    }
-                    
                     string fname = Path.GetFileName(videoSrc);
                     downloaded = await DownloadFileAsync(videoSrc, Path.Combine(baseTagDir, "Video", fname), "Video");
                     if (downloaded) dlVideos++;
                 }
             }
             
-            // ---- گیف (فقط از og:image با پسوند gif) ----
+            // ---- Gif ----
             if (!downloaded && dlGifs < wantedGifs)
             {
                 var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
                 if (ogImage != null)
                 {
                     var imgUrl = ogImage.GetAttributeValue("content", null);
-                    if (!string.IsNullOrEmpty(imgUrl))
+                    if (!string.IsNullOrEmpty(imgUrl) && imgUrl.ToLowerInvariant().EndsWith(".gif"))
                     {
-                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.IndexOf('?'));
-                        if (Path.GetExtension(imgUrl)?.ToLowerInvariant() == ".gif")
-                        {
-                            downloaded = await DownloadFileAsync(imgUrl, Path.Combine(baseTagDir, "Gif", Path.GetFileName(imgUrl)), "Gif");
-                            if (downloaded) dlGifs++;
-                        }
+                        downloaded = await DownloadFileAsync(imgUrl, Path.Combine(baseTagDir, "Gif", Path.GetFileName(imgUrl)), "Gif");
+                        if (downloaded) dlGifs++;
                     }
                 }
             }
             
-            // ---- تصویر ----
+            // ---- Image ----
             if (!downloaded && dlImages < wantedImages)
             {
                 var ogImage = postDoc.DocumentNode.SelectSingleNode("//meta[@property='og:image']");
                 if (ogImage != null)
                 {
                     var imgUrl = ogImage.GetAttributeValue("content", null);
-                    if (!string.IsNullOrEmpty(imgUrl))
+                    if (!string.IsNullOrEmpty(imgUrl) && !imgUrl.ToLowerInvariant().EndsWith(".gif"))
                     {
-                        if (imgUrl.Contains('?')) imgUrl = imgUrl.Substring(0, imgUrl.IndexOf('?'));
-                        string ext = Path.GetExtension(imgUrl)?.ToLowerInvariant() ?? ".jpg";
-                        if (ext != ".gif")
-                        {
-                            downloaded = await DownloadFileAsync(imgUrl, Path.Combine(baseTagDir, "Images", Path.GetFileName(imgUrl)), "Image");
-                            if (downloaded) dlImages++;
-                        }
+                        downloaded = await DownloadFileAsync(imgUrl, Path.Combine(baseTagDir, "Images", Path.GetFileName(imgUrl)), "Image");
+                        if (downloaded) dlImages++;
                     }
                 }
             }
@@ -351,17 +364,26 @@ async Task HtmlMode()
             totalChecked++;
             if (downloaded) await Task.Delay(100);
             
-            if (totalChecked % 10 == 0)
+            if (totalChecked % 5 == 0)
                 Console.WriteLine($"📊 Checked: {totalChecked} | I:{dlImages}/{wantedImages} G:{dlGifs}/{wantedGifs} V:{dlVideos}/{wantedVideos}");
         }
-        pid += 42; // هر صفحه 42 پست دارد
+        pid += 42;
     }
     Console.WriteLine($"🎉 Done. Checked {totalChecked} posts | Images:{dlImages}/{wantedImages} Gifs:{dlGifs}/{wantedGifs} Videos:{dlVideos}/{wantedVideos}");
 }
 
-if (useApi)
-    await ApiMode();
-else
-    await HtmlMode();
+try
+{
+    if (useApi)
+        await ApiMode();
+    else
+        await HtmlMode();
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"💥 Fatal error: {ex.Message}");
+    Console.WriteLine($"Stack trace: {ex.StackTrace}");
+    return 1;
+}
 
 return 0;
