@@ -39,18 +39,9 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
-    env:
-      IMAGES: ${{ github.event.inputs.images }}
-      GIFS: ${{ github.event.inputs.gifs }}
-      VIDEOS: ${{ github.event.inputs.videos }}
-      VIDEO_MIN_DUR: ${{ github.event.inputs.video_min_duration }}
-      USE_API: ${{ github.event.inputs.use_api }}
-      COMPRESS_FILES: ${{ github.event.inputs.compress_files }}
-      MAX_TOTAL: ${{ github.event.inputs.max_total }}
-      TAGS: ${{ github.event.inputs.tags }}
-
+    
     steps:
-    - name: Checkout repository (full history for pull/push)
+    - name: Checkout repository
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
@@ -67,37 +58,34 @@ jobs:
     - name: Run Download Script
       run: |
         EXTRA_ARGS=""
-        if [ "$USE_API" = "false" ]; then
+        if [ "${{ github.event.inputs.use_api }}" = "false" ]; then
           EXTRA_ARGS="--no-api"
         fi
-        if [ "$COMPRESS_FILES" = "false" ]; then
+        if [ "${{ github.event.inputs.compress_files }}" = "false" ]; then
           EXTRA_ARGS="$EXTRA_ARGS --no-compress"
         fi
         
         dotnet script script.csx \
-          --tags "$TAGS" \
-          --images $IMAGES \
-          --gifs $GIFS \
-          --videos $VIDEOS \
-          --video-min-duration $VIDEO_MIN_DUR \
-          --max-total $MAX_TOTAL \
+          --tags "${{ github.event.inputs.tags }}" \
+          --images ${{ github.event.inputs.images }} \
+          --gifs ${{ github.event.inputs.gifs }} \
+          --videos ${{ github.event.inputs.videos }} \
+          --video-min-duration ${{ github.event.inputs.video_min_duration }} \
+          --max-total ${{ github.event.inputs.max_total }} \
           $EXTRA_ARGS
 
     - name: Commit and Push changes
       shell: bash
       run: |
-        # ابتدا pull برای گرفتن آخرین تغییرات (اگر کسی دیگری push کرده باشد)
-        git pull --rebase origin main || echo "Pull failed or no changes, continuing"
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
         
-        # حالا فایل‌های جدید را stage می‌کنیم
         git add downloads/
         
-        # اگر تغییری نبوده commit انجام نمی‌شود
         if git diff --cached --quiet; then
           echo "No changes to commit"
         else
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git commit -m "Update: $TAGS | I:$IMAGES G:$GIFS V:$VIDEOS MinDur:${VIDEO_MIN_DUR}s"
+          git pull --rebase origin main || echo "Pull failed, continuing"
+          git commit -m "Update: ${{ github.event.inputs.tags }} | I:${{ github.event.inputs.images }} G:${{ github.event.inputs.gifs }} V:${{ github.event.inputs.videos }} MinDur:${{ github.event.inputs.video_min_duration }}s"
           git push origin main
         fi
