@@ -109,6 +109,8 @@ a
 
 ---
 
+---
+
 ## فایل های دانلود شده در گیتهاب شما :
 
 1. [194a8b2f-35a7-49af-bb7e-9ce75020c84a](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/194a8b2f-35a7-49af-bb7e-9ce75020c84a)
@@ -147,10 +149,12 @@ a
 
 18. [unsafe-tbs-moonfix-chunkeventchange](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/unsafe-tbs-moonfix-chunkeventchange)
 
-19. [vc_redist.x64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/vc_redist.x64)
+19. [v2rayN-windows-arm64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/v2rayN-windows-arm64)
 
-20. [vc_redist.x86](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/vc_redist.x86)
+20. [vc_redist.x64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/vc_redist.x64)
 
-21. [video_femboy](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/video_femboy)
+21. [vc_redist.x86](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/vc_redist.x86)
+
+22. [video_femboy](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/video_femboy)
 
 ---
