@@ -117,6 +117,8 @@ a
 
 ---
 
+---
+
 ## فایل های دانلود شده در گیتهاب شما :
 
 1. [1040](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/1040)
@@ -168,5 +170,7 @@ a
 24. [vc_redist.x86](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/vc_redist.x86)
 
 25. [video_femboy](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/video_femboy)
+
+26. [zulu21.50.19-ca-jdk21.0.11-win_x64](https://github.com/ALIIRAN3615F/downloaderNew/tree/main/downloads/zulu21.50.19-ca-jdk21.0.11-win_x64)
 
 ---
